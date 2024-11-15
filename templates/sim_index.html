@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Life Synth</title>
+    <style>
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(16, 20px);
+            grid-template-rows: repeat(16, 20px);
+            gap: 1px;
+            margin-top: 20px;
+        }
+        .cell {
+            width: 20px;
+            height: 20px;
+            border: 1px solid black;
+            cursor: pointer;
+        }
+        .alive {
+            background-color: yellow;
+        }
+        .dead {
+            background-color: white;
+        }
+        .born {
+            background-color: blue;
+        }
+        .dying {
+            background-color: red;
+        }
+        .current {
+            border: 2px solid lightblue;
+        }
+    </style>
+</head>
+<body>
+    <h1>Life Synth</h1>
+    <div>Step <span id="stepCounter">0</span></div>
+    <div class="settings">
+        <label for="bpm">BPM:</label>
+        <input type="number" id="bpm" value="120"> <br>
+        <button id="applySettings">Apply BPM</button>
+    </div>
+    <div class="controls">
+        <button id="step">Step</button>
+        <button id="auto">Auto</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="reset">Reset</button>
+    </div>
+    <div id="grid"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
+    <script src="/static/audio_config.js"></script>
+    <script>
+        const GRID_SIZE = 16; // Определяем GRID_SIZE
+        const gridElement = document.getElementById('grid');
+        const stepCounterElement = document.getElementById('stepCounter');
+        const bpmInput = document.getElementById('bpm');
+        const applySettingsButton = document.getElementById('applySettings');
+        const stepButton = document.getElementById('step');
+        const autoButton = document.getElementById('auto');
+        const stopButton = document.getElementById('stop');
+        const resetButton = document.getElementById('reset');
+
+		let grid = [];
+		let stepCounter = 0;
+		let isPlaying = false;
+
+		const noteFrequencies = audioConfig.noteFrequencies; // Получаем частоты нот
+		const samples = { birth: {}, death: {} };
+
+		async function loadSamples() {
+			for (let i = 0; i < noteFrequencies.length; i++) {
+				samples.birth[i] = await Tone.Buffer.fromUrl(`/static/samples/birth_${i}.wav`);
+				samples.death[i] = await Tone.Buffer.fromUrl(`/static/samples/death_${i}.wav`);
+			}
+			console.log('All samples loaded');
+		}
+
+		function createGrid() {
+			gridElement.innerHTML = '';
+			grid = [];
+			for (let i = 0; i < GRID_SIZE; i++) {
+				let row = [];
+				for (let j = 0; j < GRID_SIZE; j++) {
+					const cell = document.createElement('div');
+					cell.classList.add('cell', 'dead');
+					cell.dataset.row = i;
+					cell.dataset.col = j;
+					cell.addEventListener('click', () => toggleCell(i, j));
+					gridElement.appendChild(cell);
+					row.push(0);
+				}
+				grid.push(row);
+			}
+		}
+
+		function toggleCell(i, j) {
+			grid[i][j] = 1 - grid[i][j];
+			updateCellVisual(i, j);
+		}
+
+		function updateCellVisual(i, j) {
+			const cell = gridElement.children[i * GRID_SIZE + j];
+			cell.classList.toggle('alive', grid[i][j] === 1);
+			cell.classList.toggle('dead', grid[i][j] === 0);
+		}
+
+		function updateGrid() {
+			let newGrid = JSON.parse(JSON.stringify(grid));
+			for (let i = 0; i < GRID_SIZE; i++) {
+				for (let j = 0; j < GRID_SIZE; j++) {
+					let neighbors = countNeighbors(i, j);
+					if (grid[i][j] === 1 && (neighbors < 2 || neighbors > 3)) {
+						newGrid[i][j] = 0;
+					} else if (grid[i][j] === 0 && neighbors === 3) {
+						newGrid[i][j] = 1;
+					}
+				}
+			}
+			return newGrid;
+		}
+
+		function countNeighbors(x, y) {
+			let count = 0;
+			for (let i = -1; i <= 1; i++) {
+				for (let j = -1; j <= 1; j++) {
+					if (i === 0 && j === 0) continue;
+					let newX = (x + i + GRID_SIZE) % GRID_SIZE;
+					let newY = (y + j + GRID_SIZE) % GRID_SIZE;
+					count += grid[newX][newY];
+				}
+			}
+			return count;
+		}
+
+	    function processColumn() {
+	        // Сохраняем текущее состояние сетки
+	        const oldGrid = JSON.parse(JSON.stringify(grid));
+	        
+	        // Обновляем состояние сетки
+	        grid = updateGrid();
+	        stepCounter++;
+	        stepCounterElement.textContent = stepCounter;
+
+	        // Обрабатываем каждую клетку в сетке
+	        for (let i = 0; i < GRID_SIZE; i++) {
+	            for (let j = 0; j < GRID_SIZE; j++) {
+	                const cell = gridElement.children[i * GRID_SIZE + j];
+	                const oldState = oldGrid[i][j];
+	                const newState = grid[i][j];
+
+	                if (oldState === 0 && newState === 1) {
+	                    cell.classList.add('born');
+	                    playSound(i, 'birth'); // Замените на правильный индекс для звука рождения
+	                } else if (oldState === 1 && newState === 0) {
+	                    cell.classList.add('dying');
+	                    playSound(i, 'death'); // Замените на правильный индекс для звука смерти
+	                }
+
+	                setTimeout(() => {
+	                    cell.classList.remove('born', 'dying');
+	                    cell.classList.toggle('alive', newState === 1);
+	                    cell.classList.toggle('dead', newState === 0);
+	                }, 250);
+	            }
+	        }
+
+	        // Обновляем визуальное состояние всех клеток
+	        for (let i = 0; i < GRID_SIZE; i++) {
+	            for (let j = 0; j < GRID_SIZE; j++) {
+	                const cell = gridElement.children[i * GRID_SIZE + j];
+	                cell.classList.toggle('alive', grid[i][j] === 1);
+	                cell.classList.toggle('dead', grid[i][j] === 0);
+	            }
+	        }
+	    }
+
+	    function playSound(rowIndex, type) {
+	        if (samples[type][rowIndex]) { // Используем rowIndex для доступа к массиву
+	            const player = new Tone.Player(samples[type][rowIndex]).toDestination();
+	            player.start();
+	        }
+	    }
+
+	    function startPlaying() {
+	        Tone.Transport.bpm.value = bpmValue;
+	        loop = new Tone.Loop(processColumn, '16n').start(0);
+	        Tone.Transport.start();
+	        isPlaying = true;
+	        autoButton.disabled = true;
+	        stopButton.disabled = false;
+	        stepButton.disabled = true;
+	    }
+
+	    function stopPlaying() {
+	        if (loop) {
+	            loop.cancel(0);
+	            loop.dispose();
+	            loop = null;
+	        }
+	        Tone.Transport.stop();
+	        Tone.Transport.cancel(0);
+	        isPlaying = false;
+	        autoButton.disabled = false;
+	        stopButton.disabled = true;
+	        stepButton.disabled = false;
+
+	        currentColumn=0;
+
+	        document.querySelectorAll('.cell').forEach(cell => {
+	            cell.classList.remove('current', 'born', 'dying');
+	        });
+	    }
+
+	    stepButton.addEventListener('click', () => { processColumn(); });
+	    autoButton.addEventListener('click', async () => { await Tone.start(); startPlaying(); });
+	    stopButton.addEventListener('click', stopPlaying);
+	    resetButton.addEventListener('click', () => { stopPlaying(); createGrid(); stepCounter=0; stepCounterElement.textContent=stepCounter; });
+	    applySettingsButton.addEventListener('click', () => { 
+	    	const newBPM=parseInt(bpmInput.value); 
+	    	if (!isNaN(newBPM) && newBPM > 0) { 
+	    		bpmValue=newBPM; 
+	    		if(isPlaying){ 
+	    			Tone.Transport.bpm.value=bpmValue; 
+	    		} 
+	    	} 
+	    });
+
+	    loadSamples().then(() => { createGrid(); console.log('Grid created and samples loaded'); });
+		
+    </script>
+</body>
+</html>
