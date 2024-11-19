@@ -18,18 +18,13 @@
             border: 1px solid black;
             cursor: pointer;
         }
-        .alive {
-            background-color: yellow;
-        }
-        .dead {
-            background-color: white;
-        }
-        .born {
-            background-color: blue;
-        }
-        .dying {
-            background-color: red;
-        }
+        .alive { background-color: yellow; }
+        .dead { background-color: white; }
+        .born { background-color: blue; }
+        .dying { background-color: red; }
+        
+        .current { border: 2px solid blue;
+		}
     </style>
 </head>
 <body>
@@ -37,7 +32,8 @@
     <div>Step <span id="stepCounter">0</span></div>
     <div class="settings">
         <label for="bpm">BPM:</label>
-        <input type="number" id="bpm" value="120"> <br>
+        <input type="number" id="bpm" value="120">
+        <br>
         <button id="applySettings">Apply BPM</button>
     </div>
     <div class="controls">
@@ -49,186 +45,410 @@
     <div id="grid"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
-    <script src="/static/audio_config.js"></script>
-    <script>
-        const GRID_SIZE = 16; // Определяем GRID_SIZE
-        const MAX_SIMULTANEOUS_SOUNDS = 12; // Максимальное количество одновременно звучащих звуков
-        const gridElement = document.getElementById('grid');
-        const stepCounterElement = document.getElementById('stepCounter');
-        const bpmInput = document.getElementById('bpm');
-        const applySettingsButton = document.getElementById('applySettings');
-        const stepButton = document.getElementById('step');
-        const autoButton = document.getElementById('auto');
-        const stopButton = document.getElementById('stop');
-        const resetButton = document.getElementById('reset');
+    <script type="module">
+    import AudioEngine from 'http://127.0.0.1:5000/static/audio_engine.js';
 
-		let grid = [];
-		let stepCounter = 0;
-		let isPlaying = false;
-		let autoInterval; // Для хранения интервала автоигры
-		let bpmValue = 120; // Инициализируем bpmValue
+document.addEventListener('DOMContentLoaded', async () => {
+    console.log('DOMContentLoaded event fired');
 
-		const noteFrequencies = audioConfig.noteFrequencies; // Получаем частоты нот
-		const samples = { birth: {}, death: {} };
-		const activePlayers = []; // Массив для активных звуков
+    const GRID_SIZE = 16;
+    const gridElement = document.getElementById('grid');
+    const stepCounterElement = document.getElementById('stepCounter');
+    const bpmInput = document.getElementById('bpm');
+    const applySettingsButton = document.getElementById('applySettings');
+    const stepButton = document.getElementById('step');
+    const autoButton = document.getElementById('auto');
+    const stopButton = document.getElementById('stop');
+    const resetButton = document.getElementById('reset');
 
-		async function loadSamples() {
-			for (let i = 0; i < noteFrequencies.length; i++) {
-				samples.birth[i] = await Tone.Buffer.fromUrl(`/static/samples/birth_${i}.wav`);
-				samples.death[i] = await Tone.Buffer.fromUrl(`/static/samples/death_${i}.wav`);
-			}
-			console.log('All samples loaded');
-		}
+    let grid = [];
+    let stepCounter = 0;
+    let isPlaying = false;
+    let bpmValue = 120;
+    let audioEngine = null;
+    let currentColumn = 0;
+    let timerId;
+    let audioInitialized = false;
 
-		function createGrid() {
-			gridElement.innerHTML = '';
-			grid = [];
-			for (let i = 0; i < GRID_SIZE; i++) {
-				let row = [];
-				for (let j = 0; j < GRID_SIZE; j++) {
-					const cell = document.createElement('div');
-					cell.classList.add('cell', 'dead');
-					cell.dataset.row = i;
-					cell.dataset.col = j;
-					cell.addEventListener('click', () => toggleCell(i, j));
-					gridElement.appendChild(cell);
-					row.push(0);
-				}
-				grid.push(row);
-			}
-		}
+    async function loadInitialGrid() {
+        console.log('Loading initial grid...');
+        try {
+            const response = await fetch('/initial-grid');
+            console.log('Response received:', response);
+            if (!response.ok) {
+                throw new Error(`Failed to load initial grid: ${response.statusText}`);
+            }
+            const data = await response.json();
+            console.log('Initial grid data:', data);
+            grid = data.grid;
+            stepCounter = data.stepCounter || 0;
+            console.log('Updated grid:', grid);
+            console.log('Step counter:', stepCounter);
+            stepCounterElement.textContent = stepCounter;
+            console.log('Calling createGrid...');
+            createGrid();
+            console.log('createGrid called');
+            return true;
+        } catch (error) {
+            console.error('Error in loadInitialGrid:', error);
+            return false;
+        }
+    }
+    
+    async function initAudioEngine() {
+        console.log('Initializing audio engine...');
+        try {
+            audioEngine = new AudioEngine({ 
+                GRID_SIZE: GRID_SIZE,
+                initialBPM: bpmValue,
+                MAX_SIMULTANEOUS_SOUNDS: 8
+            });
+            console.log('AudioEngine instance created:', audioEngine);
+            
+            // Устанавливаем таймаут на инициализацию
+            const initPromise = audioEngine.init();
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Audio initialization timeout')), 10000));
+            
+            await Promise.race([initPromise, timeoutPromise]);
+            
+            console.log('AudioEngine successfully initialized');
+            audioInitialized = true;
+            return true;
+        } catch (error) {
+            console.error('Failed to initialize audio engine:', error);
+            audioEngine = null;
+            audioInitialized = false;
+            // Продолжаем работу без звука
+            return false;
+        }
+    }
 
-		function toggleCell(i, j) {
-			grid[i][j] = 1 - grid[i][j];
-			updateCellVisual(i, j);
-		}
+    function createGrid() {
+        console.log('Creating grid...');
+        console.log('Current grid data:', grid);
+        gridElement.innerHTML = '';
 
-		function updateCellVisual(i, j) {
-			const cell = gridElement.children[i * GRID_SIZE + j];
-			cell.classList.toggle('alive', grid[i][j] === 1);
-			cell.classList.toggle('dead', grid[i][j] === 0);
-		}
+        for (let i = 0; i < GRID_SIZE; i++) {
+            for (let j = 0; j < GRID_SIZE; j++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                
+                updateCellClass(cell, grid[i][j]);
+                cell.dataset.row = i;
+                cell.dataset.col = j;
 
-		function updateGrid() {
-			let newGrid = JSON.parse(JSON.stringify(grid));
-			for (let i = 0; i < GRID_SIZE; i++) {
-				for (let j = 0; j < GRID_SIZE; j++) {
-					let neighbors = countNeighbors(i, j);
-					if (grid[i][j] === 1 && (neighbors < 2 || neighbors > 3)) {
-						newGrid[i][j] = 0;
-					} else if (grid[i][j] === 0 && neighbors === 3) {
-						newGrid[i][j] = 1;
-					}
-				}
-			}
-			return newGrid;
-		}
+                cell.addEventListener('click', () => {
+                    console.log(`Cell clicked: ${i}, ${j}`);
+                    toggleCell(i, j);
+                });
 
-		function countNeighbors(x, y) {
-			let count = 0;
-			for (let i = -1; i <= 1; i++) {
-				for (let j = -1; j <= 1; j++) {
-					if (i === 0 && j === 0) continue;
-					let newX = (x + i + GRID_SIZE) % GRID_SIZE;
-					let newY = (y + j + GRID_SIZE) % GRID_SIZE;
-					count += grid[newX][newY];
-				}
-			}
-			return count;
-		}
+                gridElement.appendChild(cell);
+            }
+        }
+        console.log('Grid created successfully');
+    }
 
-	    function processStep() {
-	        // Сохраняем текущее состояние сетки
-	        const oldGrid = JSON.parse(JSON.stringify(grid));
-	        
-	        // Обновляем состояние сетки
-	        grid = updateGrid();
-	        stepCounter++;
-	        stepCounterElement.textContent = stepCounter;
+async function toggleCell(i, j) {
+        grid[i][j] = grid[i][j] === 0 ? 1 : 0;
+        const cell = gridElement.children[i * GRID_SIZE + j];
+        updateCellClass(cell, grid[i][j]);
 
-	        // Проходим по всем колонкам
-	        for (let currentColumn = 0; currentColumn < GRID_SIZE; currentColumn++) {
-	            setTimeout(() => {
-	                for (let i = 0; i < GRID_SIZE; i++) {
-	                    const cell = gridElement.children[i * GRID_SIZE + currentColumn];
-	                    const oldState = oldGrid[i][currentColumn];
-	                    const newState = grid[i][currentColumn];
+        fetch('/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'toggle', cell: [i, j] })
+        });
+    }
+    
+function updateCellClass(cell, state) {
+        cell.className = 'cell';
+        if (state === 1 || state === 'alive') {
+            cell.classList.add('alive');
+        } else if (state === 2 || state === 'born') {
+            cell.classList.add('born');
+        } else if (state === 3 || state === 'dying') {
+            cell.classList.add('dying');
+        } else {
+            cell.classList.add('dead');
+        }
+    }
+ 
+  function calculateDelay() {
+        const msPerBeat = 60000 / bpmValue;
+        const msPerFullCycle = msPerBeat * 8;
+        return msPerFullCycle / GRID_SIZE;
+    }
 
-	                    if (oldState === 0 && newState === 1) { // Клетка родилась
-	                        cell.classList.add('born');
-	                        playSound(i, 'birth'); 
-	                    } else if (oldState === 1 && newState === 0) { // Клетка умерла
-	                        cell.classList.add('dying');
-	                        playSound(i, 'death'); 
-	                    }
 
-	                    setTimeout(() => {
-	                        cell.classList.remove('born', 'dying');
-	                        cell.classList.toggle('alive', newState === 1);
-	                        cell.classList.toggle('dead', newState === 0);
-	                    }, 250); // Задержка для визуального эффекта
-	                }
-	            }, currentColumn * 250); // Задержка между колонками
-	        }
-	    }
+function processColumn() {
+    const delay = calculateDelay();
+    if (currentColumn >= GRID_SIZE) {
+        currentColumn = 0;
+        if (isPlaying) {
+            timerId = setTimeout(() => {
+                processStep().then(() => {
+                    processColumn();
+                });
+            }, delay);
+        }
+        return;
+    }
 
-	    function playSound(rowIndex, type) {
-	        if (samples[type][rowIndex]) { 
-	            if (activePlayers.length >= MAX_SIMULTANEOUS_SOUNDS) { 
-	                const oldestPlayer = activePlayers.shift(); // Удаляем самый старый звук
-	                oldestPlayer.stop(); // Останавливаем его
-	            }
+    for (let row = 0; row < GRID_SIZE; row++) {
+        const cellState = grid[row][currentColumn];
+        const cell = gridElement.children[row * GRID_SIZE + currentColumn];
+        
+        if (cellState === 2) { // Рождение клетки
+            audioEngine.playSound(row, 'birth')
+                .catch(err => console.error('Error playing birth sound:', err));
+            updateCellClass(cell, 'born');
+        } else if (cellState === 3) { // Смерть клетки
+            audioEngine.playSound(row, 'death')
+                .catch(err => console.error('Error playing death sound:', err));
+            updateCellClass(cell, 'dying');
+        }
+    }
 
-	            const player = new Tone.Player(samples[type][rowIndex]).toDestination();
-	            player.start();
-	            activePlayers.push(player); // Добавляем нового игрока в массив активных звуков
-	        }
-	    }
+    updateColumnVisual();
+    currentColumn++;
+    timerId = setTimeout(processColumn, delay);
+}
 
-	    function startPlaying() {
-	        Tone.Transport.bpm.value = bpmValue;
+    function updateColumnVisual() {
+        const prevColumn = (currentColumn - 1 + GRID_SIZE) % GRID_SIZE;
 
-	        autoInterval = setInterval(() => { 
-	            processStep(); 
-	        }, (60000 / bpmValue)); // Интервал в миллисекундах на основе BPM
+        for (let row = 0; row < GRID_SIZE; row++) {
+            const prevCell = gridElement.children[row * GRID_SIZE + prevColumn];
+            if (prevCell.classList.contains('born')) {
+                updateCellClass(prevCell, 'alive');
+            }
+            if (prevCell.classList.contains('dying')) {
+                updateCellClass(prevCell, 'dead');
+            }
+        }
 
-	        isPlaying = true;
-	        autoButton.disabled = true;
-	        stopButton.disabled = false;
-	        stepButton.disabled = true;
-	    }
+        // Обновляем индикатор текущей колонки
+        for (let row = 0; row < GRID_SIZE; row++) {
+            if (currentColumn > 0) {
+                const prevCell = gridElement.children[row * GRID_SIZE + (currentColumn - 1)];
+                prevCell.classList.remove('current');
+            }
+            const newCell = gridElement.children[row * GRID_SIZE + currentColumn];
+            newCell.classList.add('current');
+        }
+    }
 
-	    function stopPlaying() {
-	        clearInterval(autoInterval); // Останавливаем автоигру
-	        isPlaying = false;
+function updateEntireGrid() {
+    for (let i = 0; i < GRID_SIZE; i++) {
+        for (let j = 0; j < GRID_SIZE; j++) {
+            const cell = gridElement.children[i * GRID_SIZE + j];
+            
+            // Обновляем класс клетки на основе её текущего состояния
+            updateCellClass(cell, grid[i][j]);
+        }
+    }
+}
 
-	    	document.querySelectorAll('.cell').forEach(cell => { 
-	    		cell.classList.remove('current', 'born', 'dying'); 
-	    	});
-	    	autoButton.disabled = false;
-	    	stopButton.disabled = true;
-	    	stepButton.disabled = false;
+    async function initializeApp() {
+        console.log('Initializing app...');
+        try {
+            console.log('Calling createAudioEngine...');
+            await createAudioEngine();
+            console.log('AudioEngine created');
+            console.log('Calling loadInitialGrid...');
+            await loadInitialGrid();
+            console.log('Initial grid loaded');
+        } catch (error) {
+            console.error('Error in initializeApp:', error);
+        }
+    }
 
-	    	currentColumn=0;
+     function processStep() {
+    console.log('Processing step...');
+    return fetch('/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'step' })
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Step processed, updated grid:', data.grid);
+        grid = data.grid;
+        stepCounter = data.stepCounter;
+        stepCounterElement.textContent = stepCounter;
+        // Не вызываем createGrid() здесь
+    })
+    .catch(error => {
+        console.error('Error processing step:', error);
+    });
+}
 
-	    }
+async function startPlaying() {
+    if (isPlaying) return;
 
-	    stepButton.addEventListener('click', () => { processStep(); });
-	    autoButton.addEventListener('click', async () => { await Tone.start(); startPlaying(); });
-	    stopButton.addEventListener('click', stopPlaying);
-	    resetButton.addEventListener('click', () => { stopPlaying(); createGrid(); stepCounter=0; stepCounterElement.textContent=stepCounter; });
-	    applySettingsButton.addEventListener('click', () => { 
-	    	const newBPM=parseInt(bpmInput.value); 
-	    	if (!isNaN(newBPM) && newBPM > 0) { 
-	    		bpmValue=newBPM; 
-	    		if(isPlaying){ 
-	    			Tone.Transport.bpm.value=bpmValue; 
-	    		} 
-	    	} 
-	    });
+    // Проверяем и инициализируем AudioEngine если нужно
+    if (!audioEngine || !audioEngine.isInitialized) {
+        await createAudioEngine();
+    }
 
-	    loadSamples().then(() => { createGrid(); console.log('Grid created and samples loaded'); });
-		
-    </script>
+    isPlaying = true;
+    stopButton.disabled = false;
+    autoButton.disabled = true;
+    currentColumn = 0;
+
+    await processStep();
+    processColumn();
+}
+
+    function stopPlaying() {
+        isPlaying = false;
+        stopButton.disabled = true;
+        autoButton.disabled = false;
+        clearTimeout(timerId);
+    }
+
+async function createAudioEngine() {
+    console.log('Creating AudioEngine...');
+    try {
+        if (audioEngine) {
+            await audioEngine.dispose();
+        }
+        
+        audioEngine = new AudioEngine({ 
+            GRID_SIZE: GRID_SIZE,
+            initialBPM: bpmValue 
+        });
+        
+        console.log('AudioEngine instance created:', audioEngine);
+        await audioEngine.init();
+        console.log('AudioEngine initialized');
+        return true;
+    } catch (error) {
+        console.error('Error in createAudioEngine:', error);
+        return false;
+    }
+}
+
+      // Event Listeners
+    applySettingsButton.addEventListener('click', async () => {
+        const newBPM = parseInt(bpmInput.value);
+        if (!isNaN(newBPM) && newBPM > 0) {
+            bpmValue = newBPM;
+            if (isPlaying) {
+                stopPlaying();
+                startPlaying();
+            }
+        }
+    });
+
+    console.log('Starting application initialization...');
+    
+    // Сначала загружаем сетку
+    const gridLoaded = await loadInitialGrid();
+    if (!gridLoaded) {
+        console.error('Failed to load initial grid. Stopping initialization.');
+        return;
+    }
+
+    // Затем пытаемся инициализировать аудио
+    initAudioEngine().then(success => {
+        if (success) {
+            console.log('Audio engine initialized successfully');
+        } else {
+            console.log('Application will run without audio');
+        }
+    });
+
+	document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        // Предзагрузка сэмплов
+        await AudioSampleStore.loadSamples(GRID_SIZE);
+        console.log('Audio samples preloaded successfully');
+    } catch (error) {
+        console.warn('Failed to preload audio samples:', error);
+    }
+});
+
+    stepButton.addEventListener('click', async () => {
+    try {
+        // Принудительный запуск Tone.js
+        await Tone.start();
+        
+        // Инициализация AudioEngine если нужно
+        if (!audioEngine || !audioEngine.isInitialized) {
+            await createAudioEngine();
+        }
+        
+        isPlaying = false;
+        currentColumn = 0;
+        await processStep();
+        processColumn();
+    } catch (error) {
+        console.error('Step initialization error:', error);
+    }
+});
+
+autoButton.addEventListener('click', async () => {
+    try {
+        // Принудительный запуск Tone.js
+        await Tone.start();
+        
+        // Инициализация AudioEngine если нужно
+        if (!audioEngine || !audioEngine.isInitialized) {
+            await createAudioEngine();
+        }
+        
+        startPlaying();
+    } catch (error) {
+        console.error('Auto initialization error:', error);
+    }
+});
+
+    stopButton.addEventListener('click', () => stopPlaying());
+    
+    resetButton.addEventListener('click', async () => {
+        stopPlaying();
+        try {
+            const response = await fetch('/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'reset' })
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+            grid = data.grid;
+            stepCounter = data.stepCounter;
+            stepCounterElement.textContent = stepCounter;
+            currentColumn = 0;
+            createGrid();
+        } catch (error) {
+            console.error('Error resetting grid:', error);
+            alert('An error occurred while resetting the grid. Please try again.');
+        }
+    });
+
+    applySettingsButton.addEventListener('click', () => {
+        const newBPM = parseInt(bpmInput.value);
+        if (!isNaN(newBPM) && newBPM > 0) {
+            bpmValue = newBPM;
+            if (isPlaying) {
+                stopPlaying();
+                startPlaying();
+            }
+        }
+    });
+
+    window.addEventListener('beforeunload', () => {
+        if (audioEngine) {
+            audioEngine.dispose();
+        }
+    });
+
+    console.log('Application initialization completed');
+});
+</script>
 </body>
 </html>
