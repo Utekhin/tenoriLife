@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Life Synth</title>
+    <style>
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(16, 20px);
+            grid-template-rows: repeat(16, 20px);
+            gap: 1px;
+            margin-top: 20px;
+        }
+        .cell {
+            width: 20px;
+            height: 20px;
+            border: 1px solid black;
+            cursor: pointer;
+        }
+        .alive { background-color: yellow; }
+        .dead { background-color: white; }
+        .born { background-color: blue; }
+        .dying { background-color: red; }
+        .current { border: 2px solid blue; }
+    </style>
+</head>
+<body>
+    <h1>Life Synth</h1>
+    <div>Step <span id="stepCounter">0</span></div>
+    <div class="settings">
+        <label for="bpm">BPM:</label>
+        <input type="number" id="bpm" value="120">
+        <button id="applySettings">Apply BPM</button>
+    </div>
+    <div class="controls">
+        <button id="step">Step</button>
+        <button id="auto">Auto</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="reset">Reset</button>
+    </div>
+    <div id="grid"></div>
+    <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
+    <script type="module">
+        import AudioEngine from '/static/audio_engine.js';
+        import SessionManager from './session.js';
+
+        const sessionId = SessionManager.getSessionId();
+        const GRID_SIZE = 16;
+        const gridElement = document.getElementById('grid');
+        const stepCounterElement = document.getElementById('stepCounter');
+        const bpmInput = document.getElementById('bpm');
+        const applySettingsButton = document.getElementById('applySettings');
+        const stepButton = document.getElementById('step');
+        const autoButton = document.getElementById('auto');
+        const stopButton = document.getElementById('stop');
+        const resetButton = document.getElementById('reset');
+
+        let grid = [];
+        let stepCounter = 0;
+        let isPlaying = false;
+        let bpmValue = 120;
+        let audioEngine = null;
+        let currentColumn = 0;
+        let timerId;
+
+        async function loadInitialGrid() {
+            try {
+                const response = await fetch(`/initial-grid?sessionId=${sessionId}`);
+                if (!response.ok) throw new Error(`Failed to load grid: ${response.statusText}`);
+                const data = await response.json();
+                grid = data.grid;
+                stepCounter = data.stepCounter || 0;
+                stepCounterElement.textContent = stepCounter;
+                createGrid();
+            } catch (error) {
+                console.error('Error loading initial grid:', error);
+                return false;
+            }
+            return true;
+        }
+
+        async function initAudioEngine() {
+            try {
+                audioEngine = new AudioEngine({ GRID_SIZE, initialBPM: bpmValue, MAX_SIMULTANEOUS_SOUNDS: 8 });
+                const initPromise = audioEngine.init();
+                const timeout = new Promise((_, reject) => setTimeout(() => reject('Timeout'), 10000));
+                await Promise.race([initPromise, timeout]);
+            } catch (error) {
+                console.error('Audio initialization failed:', error);
+                audioEngine = null;
+                return false;
+            }
+            return true;
+        }
+
+        function createGrid() {
+            gridElement.innerHTML = '';
+            for (let i = 0; i < GRID_SIZE; i++) {
+                for (let j = 0; j < GRID_SIZE; j++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    updateCellClass(cell, grid[i][j]);
+                    cell.dataset.row = i;
+                    cell.dataset.col = j;
+                    cell.addEventListener('click', () => toggleCell(i, j));
+                    gridElement.appendChild(cell);
+                }
+            }
+        }
+
+        function updateCellClass(cell, state) {
+            cell.className = 'cell';
+            if (state === 1 || state === 'alive') cell.classList.add('alive');
+            else if (state === 2 || state === 'born') cell.classList.add('born');
+            else if (state === 3 || state === 'dying') cell.classList.add('dying');
+            else cell.classList.add('dead');
+        }
+
+        async function toggleCell(i, j) {
+            grid[i][j] = grid[i][j] === 0 ? 1 : 0;
+            const cell = gridElement.children[i * GRID_SIZE + j];
+            updateCellClass(cell, grid[i][j]);
+            fetch('/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'toggle', cell: [i, j], sessionId })
+            });
+        }
+
+        async function processStep() {
+            try {
+                const response = await fetch('/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'step', sessionId })
+                });
+                const data = await response.json();
+                grid = data.grid;
+                stepCounter = data.stepCounter;
+                stepCounterElement.textContent = stepCounter;
+                updateEntireGrid();
+            } catch (error) {
+                console.error('Error processing step:', error);
+            }
+        }
+
+        function updateEntireGrid() {
+            for (let i = 0; i < GRID_SIZE; i++) {
+                for (let j = 0; j < GRID_SIZE; j++) {
+                    const cell = gridElement.children[i * GRID_SIZE + j];
+                    updateCellClass(cell, grid[i][j]);
+                }
+            }
+        }
+
+        async function startPlaying() {
+            if (isPlaying) return;
+            isPlaying = true;
+            stopButton.disabled = false;
+            autoButton.disabled = true;
+            await processStep();
+            processColumn();
+        }
+
+        function stopPlaying() {
+            isPlaying = false;
+            stopButton.disabled = true;
+            autoButton.disabled = false;
+            clearTimeout(timerId);
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const gridLoaded = await loadInitialGrid();
+            if (!gridLoaded) return;
+
+            const audioInitialized = await initAudioEngine();
+            if (!audioInitialized) console.warn('AudioEngine not initialized.');
+        });
+
+        stepButton.addEventListener('click', () => processStep());
+        autoButton.addEventListener('click', startPlaying);
+        stopButton.addEventListener('click', stopPlaying);
+        applySettingsButton.addEventListener('click', () => {
+            bpmValue = parseInt(bpmInput.value) || 120;
+        });
+        resetButton.addEventListener('click', async () => {
+            stopPlaying();
+            await loadInitialGrid();
+        });
+    </script>
+</body>
+</html>
