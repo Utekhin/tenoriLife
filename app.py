@@ -26,8 +26,11 @@ def index():
 
 @app.route('/initial-grid')
 def initial_grid():
-    global grid, step_counter
-    return jsonify(grid=grid.tolist(), stepCounter=step_counter)
+    session_id = request.args.get('sessionId')
+    # Используйте session_id для изоляции состояния сетки
+    if session_id not in sessions:
+        sessions[session_id] = initialize_new_grid()
+    return jsonify({'grid': sessions[session_id], 'stepCounter': 0})
 
 @app.route('/update', methods=['POST'])
 def update():
@@ -53,7 +56,9 @@ def update():
     except Exception as e:
         return jsonify(error=str(e)), 500
 
-def update_grid(grid):
+def update_grid():
+    data = request.json
+    session_id = data.get('sessionId')
     new_grid = np.zeros_like(grid)
     
     for i in range(GRID_SIZE):
