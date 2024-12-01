@@ -65,21 +65,153 @@
         let timerId;
 
         async function loadInitialGrid() {
-            try {
-                const response = await fetch(`/initial-grid?sessionId=${sessionId}`);
-                if (!response.ok) throw new Error(`Failed to load grid: ${response.statusText}`);
-                const data = await response.json();
-                grid = data.grid;
-                stepCounter = data.stepCounter || 0;
-                stepCounterElement.textContent = stepCounter;
-                createGrid();
-            } catch (error) {
-                console.error('Error loading initial grid:', error);
-                return false;
+    try {
+        const response = await fetch(`/initial-grid?sessionId=${sessionId}`);
+        if (!response.ok) throw new Error(`Failed to load grid: ${response.statusText}`);
+        const data = await response.json();
+        grid = data.grid;
+        stepCounter = data.stepCounter || 0;
+        stepCounterElement.textContent = stepCounter;
+        createGrid();
+    } catch (error) {
+        console.error('Error loading initial grid:', error);
+        alert('Unable to load the initial grid. Please try again.');
+        return false;
+    }
+    return true;
+}
+
+
+         function createGrid() {
+        console.log('Creating grid...');
+        console.log('Current grid data:', grid);
+        gridElement.innerHTML = '';
+
+        for (let i = 0; i < GRID_SIZE; i++) {
+            for (let j = 0; j < GRID_SIZE; j++) {
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                
+                updateCellClass(cell, grid[i][j]);
+                cell.dataset.row = i;
+                cell.dataset.col = j;
+
+                cell.addEventListener('click', () => {
+                    console.log(`Cell clicked: ${i}, ${j}`);
+                    toggleCell(i, j);
+                });
+
+                gridElement.appendChild(cell);
             }
-            return true;
+        }
+        console.log('Grid created successfully');
+    }
+
+ async function toggleCell(i, j) {
+        grid[i][j] = grid[i][j] === 0 ? 1 : 0;
+        const cell = gridElement.children[i * GRID_SIZE + j];
+        updateCellClass(cell, grid[i][j]);
+
+        fetch('/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                action: 'toggle', 
+                cell: [i, j],
+                sessionId: sessionId 
+            })
+        });
+    }
+    
+function updateCellClass(cell, state) {
+        cell.className = 'cell';
+        if (state === 1 || state === 'alive') {
+            cell.classList.add('alive');
+        } else if (state === 2 || state === 'born') {
+            cell.classList.add('born');
+        } else if (state === 3 || state === 'dying') {
+            cell.classList.add('dying');
+        } else {
+            cell.classList.add('dead');
+        }
+    }
+ 
+  function calculateDelay() {
+        const msPerBeat = 60000 / bpmValue;
+        const msPerFullCycle = msPerBeat * 8;
+        return msPerFullCycle / GRID_SIZE;
+    }
+
+
+function processColumn() {
+    const delay = calculateDelay();
+    if (currentColumn >= GRID_SIZE) {
+        currentColumn = 0;
+        if (isPlaying) {
+            timerId = setTimeout(() => {
+                processStep().then(() => {
+                    processColumn();
+                });
+            }, delay);
+        }
+        return;
+    }
+
+    for (let row = 0; row < GRID_SIZE; row++) {
+        const cellState = grid[row][currentColumn];
+        const cell = gridElement.children[row * GRID_SIZE + currentColumn];
+        
+        if (cellState === 2) { // Рождение клетки
+            audioEngine.playSound(row, 'birth')
+                .catch(err => console.error('Error playing birth sound:', err));
+            updateCellClass(cell, 'born');
+        } else if (cellState === 3) { // Смерть клетки
+            audioEngine.playSound(row, 'death')
+                .catch(err => console.error('Error playing death sound:', err));
+            updateCellClass(cell, 'dying');
+        }
+    }
+
+    updateColumnVisual();
+    currentColumn++;
+    timerId = setTimeout(processColumn, delay);
+}
+
+    function updateColumnVisual() {
+        const prevColumn = (currentColumn - 1 + GRID_SIZE) % GRID_SIZE;
+
+        for (let row = 0; row < GRID_SIZE; row++) {
+            const prevCell = gridElement.children[row * GRID_SIZE + prevColumn];
+            if (prevCell.classList.contains('born')) {
+                updateCellClass(prevCell, 'alive');
+            }
+            if (prevCell.classList.contains('dying')) {
+                updateCellClass(prevCell, 'dead');
+            }
         }
 
+        // Обновляем индикатор текущей колонки
+        for (let row = 0; row < GRID_SIZE; row++) {
+            if (currentColumn > 0) {
+                const prevCell = gridElement.children[row * GRID_SIZE + (currentColumn - 1)];
+                prevCell.classList.remove('current');
+            }
+            const newCell = gridElement.children[row * GRID_SIZE + currentColumn];
+            newCell.classList.add('current');
+        }
+    }
+
+function updateEntireGrid() {
+    for (let i = 0; i < GRID_SIZE; i++) {
+        for (let j = 0; j < GRID_SIZE; j++) {
+            const cell = gridElement.children[i * GRID_SIZE + j];
+            
+            // Обновляем класс клетки на основе её текущего состояния
+            updateCellClass(cell, grid[i][j]);
+        }
+    }
+}
+        
         async function initAudioEngine() {
             try {
                 audioEngine = new AudioEngine({ GRID_SIZE, initialBPM: bpmValue, MAX_SIMULTANEOUS_SOUNDS: 8 });
@@ -182,8 +314,14 @@
         autoButton.addEventListener('click', startPlaying);
         stopButton.addEventListener('click', stopPlaying);
         applySettingsButton.addEventListener('click', () => {
-            bpmValue = parseInt(bpmInput.value) || 120;
-        });
+    const newBPM = parseInt(bpmInput.value);
+    if (isNaN(newBPM) || newBPM <= 0) {
+        alert('Please enter a valid BPM value (greater than 0).');
+        bpmInput.value = bpmValue; // Восстанавливаем предыдущее значение
+    } else {
+        bpmValue = newBPM;
+    }
+});
         resetButton.addEventListener('click', async () => {
             stopPlaying();
             await loadInitialGrid();
