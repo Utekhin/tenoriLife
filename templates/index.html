@@ -48,8 +48,6 @@
     <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
     <script type="module">
     import AudioEngine from '/static/audio_engine.js';
-
-document.addEventListener('DOMContentLoaded', async () => {
     import SessionManager from './session.js';
     
     const sessionId = SessionManager.getSessionId();
@@ -258,6 +256,33 @@ function updateEntireGrid() {
     }
 }
 
+document.addEventListener('DOMContentLoaded', async () => {
+    console.log('Starting application initialization...');
+
+    try {
+        // Загружаем начальные данные для сетки
+        const gridLoaded = await loadInitialGrid();
+        if (!gridLoaded) {
+            console.error('Failed to load initial grid. Stopping initialization.');
+            return;
+        }
+        console.log('Initial grid loaded.');
+
+        // Инициализируем аудио движок
+        const audioInitialized = await initAudioEngine();
+        if (audioInitialized) {
+            console.log('Audio engine initialized successfully.');
+        } else {
+            console.warn('Audio engine initialization failed. Running without audio.');
+        }
+
+        console.log('Application initialization completed.');
+    } catch (error) {
+        console.error('Error during application initialization:', error);
+    }
+});
+
+
     async function initializeApp() {
         console.log('Initializing app...');
         try {
@@ -362,23 +387,33 @@ async function createAudioEngine() {
     }
 
     // Затем пытаемся инициализировать аудио
-    initAudioEngine().then(success => {
-        if (success) {
-            console.log('Audio engine initialized successfully');
-        } else {
-            console.log('Application will run without audio');
-        }
-    });
-
-	document.addEventListener('DOMContentLoaded', async () => {
+    async function initAudioEngine() {
+    console.log('Initializing audio engine...');
     try {
-        // Предзагрузка сэмплов
-        await AudioSampleStore.loadSamples(GRID_SIZE, sessionId);  // Передайте sessionId, если метод поддерживает
-        console.log('Audio samples preloaded successfully');
+        audioEngine = new AudioEngine({ 
+            GRID_SIZE: GRID_SIZE,
+            initialBPM: bpmValue,
+            MAX_SIMULTANEOUS_SOUNDS: 8
+        });
+        console.log('AudioEngine instance created:', audioEngine);
+        
+        // Устанавливаем таймаут на инициализацию
+        const initPromise = audioEngine.init();
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Audio initialization timeout')), 10000));
+        
+        await Promise.race([initPromise, timeoutPromise]);
+        
+        console.log('AudioEngine successfully initialized');
+        audioInitialized = true;
+        return true;
     } catch (error) {
-        console.warn('Failed to preload audio samples:', error);
+        console.error('Failed to initialize audio engine:', error);
+        audioEngine = null;
+        audioInitialized = false;
+        return false; // Продолжаем работу без звука
     }
-});
+}
 
     stepButton.addEventListener('click', async () => {
     try {
