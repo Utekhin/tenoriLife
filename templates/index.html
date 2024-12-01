@@ -43,13 +43,17 @@
         <button id="reset">Reset</button>
     </div>
     <div id="grid"></div>
-
+	
+    <script src="static/session.js" type="module"></script>
     <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
     <script type="module">
     import AudioEngine from '/static/audio_engine.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('DOMContentLoaded event fired');
+    import SessionManager from './session.js';
+    
+    const sessionId = SessionManager.getSessionId();
+    console.log('Session ID:', sessionId);
 
     const GRID_SIZE = 16;
     const gridElement = document.getElementById('grid');
@@ -73,7 +77,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function loadInitialGrid() {
         console.log('Loading initial grid...');
         try {
-            const response = await fetch('/initial-grid');
+            const response = await fetch(`/initial-grid?sessionId=${sessionId}`);
             console.log('Response received:', response);
             if (!response.ok) {
                 throw new Error(`Failed to load initial grid: ${response.statusText}`);
@@ -149,7 +153,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log('Grid created successfully');
     }
 
-async function toggleCell(i, j) {
+ async function toggleCell(i, j) {
         grid[i][j] = grid[i][j] === 0 ? 1 : 0;
         const cell = gridElement.children[i * GRID_SIZE + j];
         updateCellClass(cell, grid[i][j]);
@@ -157,7 +161,11 @@ async function toggleCell(i, j) {
         fetch('/update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'toggle', cell: [i, j] })
+            body: JSON.stringify({ 
+                action: 'toggle', 
+                cell: [i, j],
+                sessionId: sessionId 
+            })
         });
     }
     
@@ -265,24 +273,26 @@ function updateEntireGrid() {
     }
 
      function processStep() {
-    console.log('Processing step...');
-    return fetch('/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'step' })
-    })
-    .then(response => response.json())
-    .then(data => {
-        console.log('Step processed, updated grid:', data.grid);
-        grid = data.grid;
-        stepCounter = data.stepCounter;
-        stepCounterElement.textContent = stepCounter;
-        // Не вызываем createGrid() здесь
-    })
-    .catch(error => {
-        console.error('Error processing step:', error);
-    });
-}
+        console.log('Processing step...');
+        return fetch('/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                action: 'step',
+                sessionId: sessionId 
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Step processed, updated grid:', data.grid);
+            grid = data.grid;
+            stepCounter = data.stepCounter;
+            stepCounterElement.textContent = stepCounter;
+        })
+        .catch(error => {
+            console.error('Error processing step:', error);
+        });
+    }
 
 async function startPlaying() {
     if (isPlaying) return;
@@ -363,7 +373,7 @@ async function createAudioEngine() {
 	document.addEventListener('DOMContentLoaded', async () => {
     try {
         // Предзагрузка сэмплов
-        await AudioSampleStore.loadSamples(GRID_SIZE);
+        await AudioSampleStore.loadSamples(GRID_SIZE, sessionId);  // Передайте sessionId, если метод поддерживает
         console.log('Audio samples preloaded successfully');
     } catch (error) {
         console.warn('Failed to preload audio samples:', error);
@@ -407,28 +417,31 @@ autoButton.addEventListener('click', async () => {
 
     stopButton.addEventListener('click', () => stopPlaying());
     
-    resetButton.addEventListener('click', async () => {
-        stopPlaying();
-        try {
-            const response = await fetch('/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'reset' })
-            });
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const data = await response.json();
-            grid = data.grid;
-            stepCounter = data.stepCounter;
-            stepCounterElement.textContent = stepCounter;
-            currentColumn = 0;
-            createGrid();
-        } catch (error) {
-            console.error('Error resetting grid:', error);
-            alert('An error occurred while resetting the grid. Please try again.');
+resetButton.addEventListener('click', async () => {
+    stopPlaying();
+    try {
+        const response = await fetch('/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                action: 'reset',
+                sessionId: sessionId  // Добавлен sessionId
+            })
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
-    });
+        const data = await response.json();
+        grid = data.grid;
+        stepCounter = data.stepCounter;
+        stepCounterElement.textContent = stepCounter;
+        currentColumn = 0;
+        createGrid();
+    } catch (error) {
+        console.error('Error resetting grid:', error);
+        alert('An error occurred while resetting the grid. Please try again.');
+    }
+});
 
     applySettingsButton.addEventListener('click', () => {
         const newBPM = parseInt(bpmInput.value);
