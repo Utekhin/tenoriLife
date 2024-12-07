@@ -7,11 +7,10 @@ CORS(app)
 
 GRID_SIZE = 16
 step_counter = 0
+sessions = {}
 
 def initialize_empty_grid():
     return np.zeros((GRID_SIZE, GRID_SIZE), dtype=int)
-
-grid = initialize_empty_grid()
 
 @app.after_request
 def add_header(response):
@@ -27,47 +26,61 @@ def index():
 @app.route('/initial-grid')
 def initial_grid():
     session_id = request.args.get('sessionId')
-    # Используйте session_id для изоляции состояния сетки
+    print(f"Received sessionId: {session_id}")
+    if not session_id:
+        return jsonify({'error': 'Session ID is required'}), 400
+
     if session_id not in sessions:
-        sessions[session_id] = initialize_new_grid()
+        print(f"Initializing new grid for session {session_id}")
+        sessions[session_id] = initialize_empty_grid().tolist()
+
+    print(f"Returning grid for session {session_id}")
     return jsonify({'grid': sessions[session_id], 'stepCounter': 0})
 
 @app.route('/update', methods=['POST'])
 def update():
-    global grid, step_counter
+    global step_counter  # Нужно только для сброса счетчика
     try:
         data = request.get_json()
+        print(f"Received data: {data}")
+
+        session_id = data.get('sessionId')
         action = data.get('action')
+        print(f"Session ID: {session_id}, Action: {action}")
+
+        if session_id not in sessions:
+            print(f"Session not found, initializing: {session_id}")
+            sessions[session_id] = initialize_empty_grid().tolist()
 
         if action == 'toggle':
             i, j = data.get('cell')
+            print(f"Toggling cell: ({i}, {j})")
             if 0 <= i < GRID_SIZE and 0 <= j < GRID_SIZE:
-                grid[i][j] = 1 - grid[i][j]
+                sessions[session_id][i][j] = 1 - sessions[session_id][i][j]
         elif action == 'step':
-            grid = update_grid(grid)
+            print(f"Processing step for session: {session_id}")
+            sessions[session_id] = update_grid(np.array(sessions[session_id]), session_id).tolist() # Исправленная строка!
+            print(f"Step processed for session: {session_id}")
             step_counter += 1
         elif action == 'reset':
-            grid = initialize_empty_grid()
+            print(f"Resetting grid for session: {session_id}")
+            sessions[session_id] = initialize_empty_grid().tolist()
             step_counter = 0
         else:
+            print(f"Invalid action: {action}")
             return jsonify(error="Invalid action"), 400
-        
-        return jsonify(grid=grid.tolist(), stepCounter=step_counter)
+
+        print(f"Returning grid: {sessions[session_id]}")
+        return jsonify(grid=sessions[session_id], stepCounter=step_counter)
     except Exception as e:
+        print(f"Error in update: {e}")
         return jsonify(error=str(e)), 500
 
-def update_grid():
-    data = request.json
-    session_id = data.get('sessionId')
+def update_grid(grid, session_id):
     new_grid = np.zeros_like(grid)
-    
+
     for i in range(GRID_SIZE):
         for j in range(GRID_SIZE):
-            total = int((grid[i, (j-1)%GRID_SIZE] + grid[i, (j+1)%GRID_SIZE] +
-                         grid[(i-1)%GRID_SIZE, j] + grid[(i+1)%GRID_SIZE, j] +
-                         grid[(i-1)%GRID_SIZE, (j-1)%GRID_SIZE] + grid[(i-1)%GRID_SIZE, (j+1)%GRID_SIZE] +
-                         grid[(i+1)%GRID_SIZE, (j-1)%GRID_SIZE] + grid[(i+1)%GRID_SIZE, (j+1)%GRID_SIZE]))
-
             # Считаем живыми клетками те, у которых значение 1 или 2
             total = sum(1 for x in [grid[i, (j-1)%GRID_SIZE], grid[i, (j+1)%GRID_SIZE],
                                     grid[(i-1)%GRID_SIZE, j], grid[(i+1)%GRID_SIZE, j],
