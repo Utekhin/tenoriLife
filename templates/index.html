@@ -40,292 +40,394 @@
         <button id="reset">Reset</button>
     </div>
     <div id="grid"></div>
-    <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
-    <script type="module">
-        import AudioEngine from '/static/audio_engine.js';
-        import SessionManager from './session.js';
+    
+<script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
+<script src="/static/session.js" type="module"></script>
+<script type="module">
+import AudioEngine from '/static/audio_engine.js';
+import SessionManager from '/static/session.js';
 
-        const sessionId = SessionManager.getSessionId();
-        const GRID_SIZE = 16;
-        const gridElement = document.getElementById('grid');
-        const stepCounterElement = document.getElementById('stepCounter');
-        const bpmInput = document.getElementById('bpm');
-        const applySettingsButton = document.getElementById('applySettings');
-        const stepButton = document.getElementById('step');
-        const autoButton = document.getElementById('auto');
-        const stopButton = document.getElementById('stop');
-        const resetButton = document.getElementById('reset');
+    class TenoriLifeApp {
+    constructor() {
+        // Constants
+        this.GRID_SIZE = 16;
 
-        let grid = [];
-        let stepCounter = 0;
-        let isPlaying = false;
-        let bpmValue = 120;
-        let audioEngine = null;
-        let currentColumn = 0;
-        let timerId;
+        // DOM Elements
+        this.gridElement = document.getElementById('grid');
+        this.stepCounterElement = document.getElementById('stepCounter');
+        this.bpmInput = document.getElementById('bpm');
+        this.applySettingsButton = document.getElementById('applySettings');
+        this.stepButton = document.getElementById('step');
+        this.autoButton = document.getElementById('auto');
+        this.stopButton = document.getElementById('stop');
+        this.resetButton = document.getElementById('reset');
 
-        async function loadInitialGrid() {
-    try {
-        const response = await fetch(`/initial-grid?sessionId=${sessionId}`);
-        if (!response.ok) throw new Error(`Failed to load grid: ${response.statusText}`);
-        const data = await response.json();
-        grid = data.grid;
-        stepCounter = data.stepCounter || 0;
-        stepCounterElement.textContent = stepCounter;
-        createGrid();
-    } catch (error) {
-        console.error('Error loading initial grid:', error);
-        alert('Unable to load the initial grid. Please try again.');
-        return false;
+        // State variables
+        this.visualGrid = [];  // Визуальное состояние сетки
+        this.grid = [];        // Логическое состояние сетки
+        this.stepCounter = 0;
+        this.isPlaying = false;
+        this.bpmValue = 120;
+        this.audioEngine = null;
+        this.currentColumn = 0;
+        this.timerId = null;
+                this.isProcessingStep = false;
+        // Session Management
+        this.sessionId = SessionManager.getSessionId();
+
+        // Bind methods to maintain context
+        this.bindMethods();
     }
-    return true;
-}
 
+    bindMethods() {
+        this.toggleCell = this.toggleCell.bind(this);
+        this.processColumn = this.processColumn.bind(this);
+        this.startPlaying = this.startPlaying.bind(this);
+        this.stopPlaying = this.stopPlaying.bind(this);
+    }
 
-         function createGrid() {
+    createGrid() {
         console.log('Creating grid...');
-        console.log('Current grid data:', grid);
-        gridElement.innerHTML = '';
+        console.log('Current grid data:', this.grid);
+                console.log('Current visual grid data:', this.visualGrid);
+        this.gridElement.innerHTML = '';
 
-        for (let i = 0; i < GRID_SIZE; i++) {
-            for (let j = 0; j < GRID_SIZE; j++) {
+        for (let i = 0; i < this.GRID_SIZE; i++) {
+            for (let j = 0; j < this.GRID_SIZE; j++) {
                 const cell = document.createElement('div');
                 cell.className = 'cell';
                 
-                updateCellClass(cell, grid[i][j]);
+                this.updateCellClass(cell, this.visualGrid[i][j]);
                 cell.dataset.row = i;
                 cell.dataset.col = j;
 
                 cell.addEventListener('click', () => {
                     console.log(`Cell clicked: ${i}, ${j}`);
-                    toggleCell(i, j);
+                    this.toggleCell(i, j);
                 });
 
-                gridElement.appendChild(cell);
+                this.gridElement.appendChild(cell);
             }
         }
         console.log('Grid created successfully');
     }
 
- async function toggleCell(i, j) {
-        grid[i][j] = grid[i][j] === 0 ? 1 : 0;
-        const cell = gridElement.children[i * GRID_SIZE + j];
-        updateCellClass(cell, grid[i][j]);
 
-        fetch('/update', {
+
+    async loadInitialGrid() {
+    try {
+        const response = await fetch(`/initial-grid?sessionId=${this.sessionId}`);
+        if (!response.ok) {
+            throw new Error(`Failed to load grid: ${response.statusText}`);
+        }
+        const data = await response.json();
+        this.grid = data.grid;
+        this.visualGrid = this.grid.map(row => row.slice()); // Создаем копию grid
+        this.stepCounter = data.stepCounter || 0;
+        this.stepCounterElement.textContent = this.stepCounter;
+        this.createGrid();
+        return true;
+    } catch (error) {
+        console.error('Error loading initial grid:', error);
+        return false;
+    }
+}
+
+        async initialize() {
+    try {
+        // Load initial grid
+        const gridLoaded = await this.loadInitialGrid();
+        if (!gridLoaded) {
+            console.error('Failed to load initial grid');
+            return;
+        }
+
+        // Set up event listeners
+        this.setupEventListeners();
+
+        console.log('TenoriLife application initialized');
+    } catch (error) {
+        console.error('Initialization error:', error);
+    }
+}
+
+async initAudioEngine() {
+    try {
+        // Принудительный запуск AudioContext после взаимодействия
+        await Tone.start();
+        console.log('Audio context started');
+
+        this.audioEngine = new AudioEngine({
+            GRID_SIZE: this.GRID_SIZE,
+            initialBPM: this.bpmValue,
+            MAX_SIMULTANEOUS_SOUNDS: 8
+        });
+
+        await this.audioEngine.init();
+        console.log('Audio engine initialized');
+        return true;
+    } catch (error) {
+        console.error('Failed to initialize audio engine:', error);
+        this.audioEngine = null;
+        return false;
+    }
+}
+
+setupEventListeners() {
+    this.gridElement.addEventListener('click', async (event) => {
+        await Tone.start(); // Принудительный запуск AudioContext
+
+        if (!this.audioEngine || !this.audioEngine.isInitialized) {
+            const audioInitialized = await this.initAudioEngine();
+            if (!audioInitialized) {
+                console.error('Failed to initialize audio engine on user interaction');
+                return;
+            }
+        }
+
+        console.log('Matrix clicked, audio engine ready');
+    });
+
+    // Другие события, кнопки управления
+    this.stepButton.addEventListener('click', this.stepOnce.bind(this));
+    this.autoButton.addEventListener('click', this.startPlaying);
+    this.stopButton.addEventListener('click', this.stopPlaying);
+    this.resetButton.addEventListener('click', this.resetGrid.bind(this));
+    this.applySettingsButton.addEventListener('click', this.updateBPM.bind(this));
+}
+
+    async toggleCell(i, j) {
+    this.grid[i][j] = this.grid[i][j] === 0 ? 1 : 0;
+    const cell = this.gridElement.children[i * this.GRID_SIZE + j];
+    this.updateCellClass(cell, this.grid[i][j]);
+    
+    try {
+        const response = await fetch('/update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
                 action: 'toggle', 
-                cell: [i, j],
-                sessionId: sessionId 
+                cell: [i, j], 
+                sessionId: this.sessionId 
             })
         });
-    }
-    
-function updateCellClass(cell, state) {
-        cell.className = 'cell';
-        if (state === 1 || state === 'alive') {
-            cell.classList.add('alive');
-        } else if (state === 2 || state === 'born') {
-            cell.classList.add('born');
-        } else if (state === 3 || state === 'dying') {
-            cell.classList.add('dying');
-        } else {
-            cell.classList.add('dead');
+        
+        if (response.ok) {
+            const data = await response.json();
+            this.grid = data.grid;
         }
+    } catch (error) {
+        console.error('Ошибка при обновлении клетки:', error);
     }
- 
-  function calculateDelay() {
-        const msPerBeat = 60000 / bpmValue;
+}
+
+    updateCellClass(cell, state) {
+    cell.className = 'cell'; // Сбрасываем все классы
+    if (state === 1 || state === 'alive') {
+        cell.classList.add('alive');
+    } else if (state === 2 || state === 'born') {
+        cell.classList.add('born');
+    } else if (state === 3 || state === 'dying') {
+        cell.classList.add('dying');
+    } else {
+        cell.classList.add('dead');
+    }
+
+    // Принудительная перерисовка
+    cell.style.display = 'none';
+    cell.offsetHeight; // Триггер перерисовки
+    cell.style.display = '';
+}
+
+
+
+   calculateDelay() {
+        const msPerBeat = 60000 / this.bpmValue;
         const msPerFullCycle = msPerBeat * 8;
-        return msPerFullCycle / GRID_SIZE;
+        return msPerFullCycle / this.GRID_SIZE;
     }
 
-
-function processColumn() {
-    const delay = calculateDelay();
-    if (currentColumn >= GRID_SIZE) {
-        currentColumn = 0;
-        if (isPlaying) {
-            timerId = setTimeout(() => {
-                processStep().then(() => {
-                    processColumn();
-                });
+    
+async processColumn() {
+    const delay = this.calculateDelay();
+    
+    if (this.currentColumn >= this.GRID_SIZE) {
+        this.currentColumn = 0;
+        if (this.isPlaying && !this.isProcessingStep) {
+            this.isProcessingStep = true;
+            this.timerId = setTimeout(async () => {
+                await this.processStep();
+                this.isProcessingStep = false;
+                this.processColumn();
             }, delay);
         }
         return;
     }
 
-    for (let row = 0; row < GRID_SIZE; row++) {
-        const cellState = grid[row][currentColumn];
-        const cell = gridElement.children[row * GRID_SIZE + currentColumn];
-        
-        if (cellState === 2) { // Рождение клетки
-            audioEngine.playSound(row, 'birth')
-                .catch(err => console.error('Error playing birth sound:', err));
-            updateCellClass(cell, 'born');
-        } else if (cellState === 3) { // Смерть клетки
-            audioEngine.playSound(row, 'death')
-                .catch(err => console.error('Error playing death sound:', err));
-            updateCellClass(cell, 'dying');
+    for (let row = 0; row < this.GRID_SIZE; row++) {
+        const cellState = this.grid[row][this.currentColumn];
+        const cell = this.gridElement.children[row * this.GRID_SIZE + this.currentColumn];
+
+        if (cellState === 2) {
+            this.updateCellClass(cell, 'born');
+            if (this.audioEngine) {
+                await this.audioEngine.playSound(row, 'birth');
+            }
+        } else if (cellState === 3) {
+            this.updateCellClass(cell, 'dying');
+            if (this.audioEngine) {
+                await this.audioEngine.playSound(row, 'death');
+            }
         }
     }
 
-    updateColumnVisual();
-    currentColumn++;
-    timerId = setTimeout(processColumn, delay);
+    this.updateColumnVisual();
+    this.currentColumn++;
+    this.timerId = setTimeout(() => this.processColumn(), delay);
 }
 
-    function updateColumnVisual() {
-        const prevColumn = (currentColumn - 1 + GRID_SIZE) % GRID_SIZE;
 
-        for (let row = 0; row < GRID_SIZE; row++) {
-            const prevCell = gridElement.children[row * GRID_SIZE + prevColumn];
-            if (prevCell.classList.contains('born')) {
-                updateCellClass(prevCell, 'alive');
-            }
-            if (prevCell.classList.contains('dying')) {
-                updateCellClass(prevCell, 'dead');
-            }
-        }
+updateColumnVisual() {
+    const prevColumn = (this.currentColumn - 1 + this.GRID_SIZE) % this.GRID_SIZE;
 
-        // Обновляем индикатор текущей колонки
-        for (let row = 0; row < GRID_SIZE; row++) {
-            if (currentColumn > 0) {
-                const prevCell = gridElement.children[row * GRID_SIZE + (currentColumn - 1)];
-                prevCell.classList.remove('current');
-            }
-            const newCell = gridElement.children[row * GRID_SIZE + currentColumn];
-            newCell.classList.add('current');
+    for (let row = 0; row < this.GRID_SIZE; row++) {
+        const prevCell = this.gridElement.children[row * this.GRID_SIZE + prevColumn];
+        const state = this.grid[row][prevColumn];
+
+        if (state === 2) {
+            this.updateCellClass(prevCell, 'alive');
+        } else if (state === 3) {
+            this.updateCellClass(prevCell, 'dead');
         }
+        
+        prevCell.classList.remove('current');
     }
 
-function updateEntireGrid() {
-    for (let i = 0; i < GRID_SIZE; i++) {
-        for (let j = 0; j < GRID_SIZE; j++) {
-            const cell = gridElement.children[i * GRID_SIZE + j];
-            
-            // Обновляем класс клетки на основе её текущего состояния
-            updateCellClass(cell, grid[i][j]);
-        }
+    for (let row = 0; row < this.GRID_SIZE; row++) {
+        const currentCell = this.gridElement.children[row * this.GRID_SIZE + this.currentColumn];
+        currentCell.classList.add('current');
     }
 }
-        
-        async function initAudioEngine() {
-            try {
-                audioEngine = new AudioEngine({ GRID_SIZE, initialBPM: bpmValue, MAX_SIMULTANEOUS_SOUNDS: 8 });
-                const initPromise = audioEngine.init();
-                const timeout = new Promise((_, reject) => setTimeout(() => reject('Timeout'), 10000));
-                await Promise.race([initPromise, timeout]);
-            } catch (error) {
-                console.error('Audio initialization failed:', error);
-                audioEngine = null;
-                return false;
-            }
-            return true;
-        }
 
-        function createGrid() {
-            gridElement.innerHTML = '';
-            for (let i = 0; i < GRID_SIZE; i++) {
-                for (let j = 0; j < GRID_SIZE; j++) {
-                    const cell = document.createElement('div');
-                    cell.className = 'cell';
-                    updateCellClass(cell, grid[i][j]);
-                    cell.dataset.row = i;
-                    cell.dataset.col = j;
-                    cell.addEventListener('click', () => toggleCell(i, j));
-                    gridElement.appendChild(cell);
-                }
-            }
-        }
-
-        function updateCellClass(cell, state) {
-            cell.className = 'cell';
-            if (state === 1 || state === 'alive') cell.classList.add('alive');
-            else if (state === 2 || state === 'born') cell.classList.add('born');
-            else if (state === 3 || state === 'dying') cell.classList.add('dying');
-            else cell.classList.add('dead');
-        }
-
-        async function toggleCell(i, j) {
-            grid[i][j] = grid[i][j] === 0 ? 1 : 0;
-            const cell = gridElement.children[i * GRID_SIZE + j];
-            updateCellClass(cell, grid[i][j]);
-            fetch('/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'toggle', cell: [i, j], sessionId })
-            });
-        }
-
-        async function processStep() {
-            try {
-                const response = await fetch('/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'step', sessionId })
-                });
-                const data = await response.json();
-                grid = data.grid;
-                stepCounter = data.stepCounter;
-                stepCounterElement.textContent = stepCounter;
-                updateEntireGrid();
-            } catch (error) {
-                console.error('Error processing step:', error);
-            }
-        }
-
-        function updateEntireGrid() {
-            for (let i = 0; i < GRID_SIZE; i++) {
-                for (let j = 0; j < GRID_SIZE; j++) {
-                    const cell = gridElement.children[i * GRID_SIZE + j];
-                    updateCellClass(cell, grid[i][j]);
-                }
-            }
-        }
-
-        async function startPlaying() {
-            if (isPlaying) return;
-            isPlaying = true;
-            stopButton.disabled = false;
-            autoButton.disabled = true;
-            await processStep();
-            processColumn();
-        }
-
-        function stopPlaying() {
-            isPlaying = false;
-            stopButton.disabled = true;
-            autoButton.disabled = false;
-            clearTimeout(timerId);
-        }
-
-        document.addEventListener('DOMContentLoaded', async () => {
-            const gridLoaded = await loadInitialGrid();
-            if (!gridLoaded) return;
-
-            const audioInitialized = await initAudioEngine();
-            if (!audioInitialized) console.warn('AudioEngine not initialized.');
+    async processStep() {
+    if (!this.grid) {
+        console.error('Grid is not initialized');
+        return;
+    }
+    try {
+        const response = await fetch('/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                action: 'step',
+                sessionId: this.sessionId 
+            })
         });
-
-        stepButton.addEventListener('click', () => processStep());
-        autoButton.addEventListener('click', startPlaying);
-        stopButton.addEventListener('click', stopPlaying);
-        applySettingsButton.addEventListener('click', () => {
-    const newBPM = parseInt(bpmInput.value);
-    if (isNaN(newBPM) || newBPM <= 0) {
-        alert('Please enter a valid BPM value (greater than 0).');
-        bpmInput.value = bpmValue; // Восстанавливаем предыдущее значение
-    } else {
-        bpmValue = newBPM;
+        if (response.ok) {
+            const data = await response.json();
+            this.grid = data.grid;
+            this.stepCounter = data.stepCounter;
+            this.stepCounterElement.textContent = this.stepCounter;
+        } else {
+            console.error('Error processing step:', response.statusText);
+        }
+    } catch (error) {
+        console.error('Error processing step:', error);
     }
+}
+
+    
+    async startPlaying() {
+    if (this.isPlaying) return;
+    try {
+        await Tone.start();
+        if (!this.audioEngine || !this.audioEngine.isInitialized) {
+            await this.initAudioEngine();
+        }
+        this.isPlaying = true;
+        this.stopButton.disabled = false;
+        this.autoButton.disabled = true;
+        this.currentColumn = 0;
+        this.isProcessingStep = true;
+        await this.processStep();
+        this.isProcessingStep = false;
+        this.processColumn();
+    } catch (error) {
+        console.error('Start playing error:', error);
+    }
+}
+
+async stepOnce() {
+    try {
+        await Tone.start();
+        if (!this.audioEngine || !this.audioEngine.isInitialized) {
+            await this.initAudioEngine();
+        }
+        this.isPlaying = false;
+        this.currentColumn = 0;
+        this.isProcessingStep = true;
+        await this.processStep();
+        this.isProcessingStep = false;
+        this.processColumn();
+    } catch (error) {
+        console.error('Step initialization error:', error);
+    }
+}
+   
+    stopPlaying() {
+        this.isPlaying = false;
+        this.stopButton.disabled = true;
+        this.autoButton.disabled = false;
+        clearTimeout(this.timerId);
+    }
+
+    async resetGrid() {
+    this.stopPlaying();
+    
+    try {
+        const response = await fetch('/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                action: 'reset',
+                sessionId: this.sessionId 
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        this.grid = data.grid;
+        this.visualGrid = this.grid.map(row => row.slice()); // Синхронизируем visualGrid с grid
+        this.stepCounter = data.stepCounter;
+        this.stepCounterElement.textContent = this.stepCounter;
+        this.currentColumn = 0;
+        this.createGrid();
+    } catch (error) {
+        console.error('Error resetting grid:', error);
+        alert('An error occurred while resetting the grid. Please try again.');
+    }
+}
+
+    updateBPM() {
+        const newBPM = parseInt(this.bpmInput.value);
+        if (!isNaN(newBPM) && newBPM > 0) {
+            this.bpmValue = newBPM;
+            if (this.isPlaying) {
+                this.stopPlaying();
+                this.startPlaying();
+            }
+        }
+    }
+}
+
+// Инициализация приложения при загрузке DOM
+document.addEventListener('DOMContentLoaded', async function initApp() {
+    const app = new TenoriLifeApp();
+    await app.initialize();
 });
-        resetButton.addEventListener('click', async () => {
-            stopPlaying();
-            await loadInitialGrid();
-        });
-    </script>
+</script>
 </body>
 </html>
