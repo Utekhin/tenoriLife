@@ -1,454 +1,477 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Life Synth</title>
-    <style>
-        #grid {
-            display: grid;
-            grid-template-columns: repeat(16, 20px);
-            grid-template-rows: repeat(16, 20px);
-            gap: 1px;
-            margin-top: 20px;
-        }
-        .cell {
-            width: 20px;
-            height: 20px;
-            border: 1px solid black;
-            cursor: pointer;
-        }
-        .alive { background-color: yellow; }
-        .dead { background-color: white; }
-        .born { background-color: blue; }
-        .dying { background-color: red; }
-        
-        .current { border: 2px solid blue;
-		}
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Life Synth</title>
+  <style>
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(16, 20px);
+      grid-template-rows: repeat(16, 20px);
+      gap: 1px;
+      margin-top: 20px;
+    }
+    .cell {
+      width: 20px;
+      height: 20px;
+      border: 1px solid black;
+      cursor: pointer;
+    }
+    .alive { background-color: yellow; }
+    .dead { background-color: white; }
+    .born { background-color: blue; }
+    .dying { background-color: red; }
+    .current { border: 2px solid blue; }
+  </style>
 </head>
 <body>
-    <h1>Life Synth</h1>
-    <div>Step <span id="stepCounter">0</span></div>
-    <div class="settings">
-        <label for="bpm">BPM:</label>
-        <input type="number" id="bpm" value="120">
-        <br>
-        <button id="applySettings">Apply BPM</button>
-    </div>
-    <div class="controls">
-        <button id="step">Step</button>
-        <button id="auto">Auto</button>
-        <button id="stop" disabled>Stop</button>
-        <button id="reset">Reset</button>
-    </div>
-    <div id="grid"></div>
+  <h1>Life Synth</h1>
+  <div>Step <span id="stepCounter">0</span></div>
+  <div class="settings">
+    <label for="bpm">BPM:</label>
+    <input type="number" id="bpm" value="120">
+    <button id="applySettings">Apply BPM</button>
+  </div>
+  <div class="controls">
+    <button id="step">Step</button>
+    <button id="auto">Auto</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="reset">Reset</button>
+    <!-- Optionally add a dedicated start-audio button -->
+    <!-- <button id="startAudio">Start Audio</button> -->
+  </div>
+  <div id="grid"></div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
+  <script type="module" src="/static/session.js"></script>
+  <script type="module">
+    import AudioEngine from '/static/audio_engine.js';
+    import SessionManager from '/static/session.js';
 
-    <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
-    <script type="module">
-    import AudioEngine from 'http://127.0.0.1:5000/static/audio_engine.js';
+    class TenoriLifeApp {
+      constructor() {
+        // Constants
+        this.GRID_SIZE = 16;
 
-document.addEventListener('DOMContentLoaded', async () => {
-    console.log('DOMContentLoaded event fired');
+        // DOM Elements
+        this.gridElement = document.getElementById('grid');
+        this.stepCounterElement = document.getElementById('stepCounter');
+        this.bpmInput = document.getElementById('bpm');
+        this.applySettingsButton = document.getElementById('applySettings');
+        this.stepButton = document.getElementById('step');
+        this.autoButton = document.getElementById('auto');
+        this.stopButton = document.getElementById('stop');
+        this.resetButton = document.getElementById('reset');
+        // this.startAudioButton = document.getElementById('startAudio'); // if using a dedicated button
 
-    const GRID_SIZE = 16;
-    const gridElement = document.getElementById('grid');
-    const stepCounterElement = document.getElementById('stepCounter');
-    const bpmInput = document.getElementById('bpm');
-    const applySettingsButton = document.getElementById('applySettings');
-    const stepButton = document.getElementById('step');
-    const autoButton = document.getElementById('auto');
-    const stopButton = document.getElementById('stop');
-    const resetButton = document.getElementById('reset');
+        // State variables
+        this.visualGrid = [];  // Visual state of the grid
+        this.grid = [];        // Logical state of the grid
+        this.stepCounter = 0;
+        this.isPlaying = false;
+        this.bpmValue = 120;
+        this.audioEngine = null;
+        this.currentColumn = 0;
+        this.timerId = null;
+        this.isProcessingStep = false;
 
-    let grid = [];
-    let stepCounter = 0;
-    let isPlaying = false;
-    let bpmValue = 120;
-    let audioEngine = null;
-    let currentColumn = 0;
-    let timerId;
-    let audioInitialized = false;
+        // Session Management
+        this.sessionId = SessionManager.getSessionId();
 
-    async function loadInitialGrid() {
-        console.log('Loading initial grid...');
-        try {
-            const response = await fetch('/initial-grid');
-            console.log('Response received:', response);
-            if (!response.ok) {
-                throw new Error(`Failed to load initial grid: ${response.statusText}`);
-            }
-            const data = await response.json();
-            console.log('Initial grid data:', data);
-            grid = data.grid;
-            stepCounter = data.stepCounter || 0;
-            console.log('Updated grid:', grid);
-            console.log('Step counter:', stepCounter);
-            stepCounterElement.textContent = stepCounter;
-            console.log('Calling createGrid...');
-            createGrid();
-            console.log('createGrid called');
-            return true;
-        } catch (error) {
-            console.error('Error in loadInitialGrid:', error);
-            return false;
+        // Bind methods so they keep the correct context
+        this.toggleCell = this.toggleCell.bind(this);
+        this.processColumn = this.processColumn.bind(this);
+        this.startPlaying = this.startPlaying.bind(this);
+        this.stopPlaying = this.stopPlaying.bind(this);
+
+        // Initialize grid arrays to avoid errors if not set by the server
+        this.initializeEmptyGrid();
+      }
+      
+      initializeEmptyGrid() {
+        // Create a 16x16 grid filled with zeros
+        for (let i = 0; i < this.GRID_SIZE; i++) {
+          const row = [];
+          for (let j = 0; j < this.GRID_SIZE; j++) {
+            row.push(0);
+          }
+          this.grid.push(row);
+          this.visualGrid.push([...row]);
         }
-    }
-    
-    async function initAudioEngine() {
-        console.log('Initializing audio engine...');
-        try {
-            audioEngine = new AudioEngine({ 
-                GRID_SIZE: GRID_SIZE,
-                initialBPM: bpmValue,
-                MAX_SIMULTANEOUS_SOUNDS: 8
-            });
-            console.log('AudioEngine instance created:', audioEngine);
-            
-            // Устанавливаем таймаут на инициализацию
-            const initPromise = audioEngine.init();
-            const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Audio initialization timeout')), 10000));
-            
-            await Promise.race([initPromise, timeoutPromise]);
-            
-            console.log('AudioEngine successfully initialized');
-            audioInitialized = true;
-            return true;
-        } catch (error) {
-            console.error('Failed to initialize audio engine:', error);
-            audioEngine = null;
-            audioInitialized = false;
-            // Продолжаем работу без звука
-            return false;
-        }
-    }
+      }
 
-    function createGrid() {
+      createGrid() {
         console.log('Creating grid...');
-        console.log('Current grid data:', grid);
-        gridElement.innerHTML = '';
+        // Clear the grid container
+        this.gridElement.innerHTML = '';
 
-        for (let i = 0; i < GRID_SIZE; i++) {
-            for (let j = 0; j < GRID_SIZE; j++) {
-                const cell = document.createElement('div');
-                cell.className = 'cell';
-                
-                updateCellClass(cell, grid[i][j]);
-                cell.dataset.row = i;
-                cell.dataset.col = j;
+        for (let i = 0; i < this.GRID_SIZE; i++) {
+          for (let j = 0; j < this.GRID_SIZE; j++) {
+            const cell = document.createElement('div');
+            cell.className = 'cell';
+            this.updateCellClass(cell, this.visualGrid[i][j]);
+            cell.dataset.row = i;
+            cell.dataset.col = j;
 
-                cell.addEventListener('click', () => {
-                    console.log(`Cell clicked: ${i}, ${j}`);
-                    toggleCell(i, j);
-                });
+            cell.addEventListener('click', () => {
+              console.log(`Cell clicked: ${i}, ${j}`);
+              this.toggleCell(i, j);
+            });
 
-                gridElement.appendChild(cell);
-            }
+            this.gridElement.appendChild(cell);
+          }
         }
         console.log('Grid created successfully');
-    }
+      }
 
-async function toggleCell(i, j) {
-        grid[i][j] = grid[i][j] === 0 ? 1 : 0;
-        const cell = gridElement.children[i * GRID_SIZE + j];
-        updateCellClass(cell, grid[i][j]);
+      async loadInitialGrid() {
+        try {
+          const response = await fetch(`/initial-grid?sessionId=${this.sessionId}`);
+          if (!response.ok) {
+            throw new Error(`Failed to load grid: ${response.statusText}`);
+          }
+          const data = await response.json();
+          this.grid = data.grid;
+          this.visualGrid = this.grid.map(row => row.slice()); // make a copy of grid
+          this.stepCounter = data.stepCounter || 0;
+          this.stepCounterElement.textContent = this.stepCounter;
+          this.createGrid();
+          return true;
+        } catch (error) {
+          console.error('Error loading initial grid:', error);
+          return false;
+        }
+      }
 
-        fetch('/update', {
+      async initialize() {
+        try {
+          // Load the initial grid from the server
+          const gridLoaded = await this.loadInitialGrid();
+          if (!gridLoaded) {
+            console.error('Failed to load initial grid');
+            return;
+          }
+          // Set up event listeners
+          this.setupEventListeners();
+          console.log('TenoriLife application initialized');
+        } catch (error) {
+          console.error('Initialization error:', error);
+        }
+      }
+
+      async initAudioEngine() {
+        try {
+          // Ensure the AudioContext is started after a user gesture.
+          // If the context is suspended, call resume() here.
+          if (Tone.context.state !== 'running') {
+            await Tone.start();
+            console.log('Audio context started via resume()');
+          }
+
+          this.audioEngine = new AudioEngine({
+            GRID_SIZE: this.GRID_SIZE,
+            initialBPM: this.bpmValue,
+            MAX_SIMULTANEOUS_SOUNDS: 8
+          });
+
+          await this.audioEngine.init();
+          console.log('Audio engine initialized');
+          return true;
+        } catch (error) {
+          console.error('Failed to initialize audio engine:', error);
+          this.audioEngine = null;
+          return false;
+        }
+      }
+
+      setupEventListeners() {
+        // This listener ensures that the AudioContext is resumed when the grid is clicked
+        this.gridElement.addEventListener('click', async () => {
+          if (Tone.context.state !== 'running') {
+            await Tone.start();
+            console.log('Audio context resumed on grid click');
+          }
+          // Optionally, you might initialize the audio engine here if needed.
+          if (!this.audioEngine || !this.audioEngine.isInitialized) {
+            const audioInitialized = await this.initAudioEngine();
+            if (!audioInitialized) {
+              console.error('Failed to initialize audio engine on user interaction');
+              return;
+            }
+          }
+          console.log('Matrix clicked, audio engine ready');
+        });
+
+        // Other control buttons
+        this.stepButton.addEventListener('click', this.stepOnce.bind(this));
+        this.autoButton.addEventListener('click', this.startPlaying);
+        this.stopButton.addEventListener('click', this.stopPlaying);
+        this.resetButton.addEventListener('click', this.resetGrid.bind(this));
+        this.applySettingsButton.addEventListener('click', this.updateBPM.bind(this));
+
+        // If using a dedicated audio start button, you can uncomment this:
+        /*
+        this.startAudioButton.addEventListener('click', async () => {
+          await Tone.start();
+          console.log('Audio context started via dedicated start button');
+        });
+        */
+      }
+
+      async toggleCell(i, j) {
+        // Toggle the logical state of the cell
+        this.grid[i][j] = this.grid[i][j] === 0 ? 1 : 0;
+        const cell = this.gridElement.children[i * this.GRID_SIZE + j];
+        this.updateCellClass(cell, this.grid[i][j]);
+
+        try {
+          const response = await fetch('/update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'toggle', cell: [i, j] })
-        });
-    }
-    
-function updateCellClass(cell, state) {
-        cell.className = 'cell';
-        if (state === 1 || state === 'alive') {
-            cell.classList.add('alive');
-        } else if (state === 2 || state === 'born') {
-            cell.classList.add('born');
-        } else if (state === 3 || state === 'dying') {
-            cell.classList.add('dying');
-        } else {
-            cell.classList.add('dead');
-        }
-    }
- 
-  function calculateDelay() {
-        const msPerBeat = 60000 / bpmValue;
-        const msPerFullCycle = msPerBeat * 8;
-        return msPerFullCycle / GRID_SIZE;
-    }
-
-
-function processColumn() {
-    const delay = calculateDelay();
-    if (currentColumn >= GRID_SIZE) {
-        currentColumn = 0;
-        if (isPlaying) {
-            timerId = setTimeout(() => {
-                processStep().then(() => {
-                    processColumn();
-                });
-            }, delay);
-        }
-        return;
-    }
-
-    for (let row = 0; row < GRID_SIZE; row++) {
-        const cellState = grid[row][currentColumn];
-        const cell = gridElement.children[row * GRID_SIZE + currentColumn];
-        
-        if (cellState === 2) { // Рождение клетки
-            audioEngine.playSound(row, 'birth')
-                .catch(err => console.error('Error playing birth sound:', err));
-            updateCellClass(cell, 'born');
-        } else if (cellState === 3) { // Смерть клетки
-            audioEngine.playSound(row, 'death')
-                .catch(err => console.error('Error playing death sound:', err));
-            updateCellClass(cell, 'dying');
-        }
-    }
-
-    updateColumnVisual();
-    currentColumn++;
-    timerId = setTimeout(processColumn, delay);
-}
-
-    function updateColumnVisual() {
-        const prevColumn = (currentColumn - 1 + GRID_SIZE) % GRID_SIZE;
-
-        for (let row = 0; row < GRID_SIZE; row++) {
-            const prevCell = gridElement.children[row * GRID_SIZE + prevColumn];
-            if (prevCell.classList.contains('born')) {
-                updateCellClass(prevCell, 'alive');
-            }
-            if (prevCell.classList.contains('dying')) {
-                updateCellClass(prevCell, 'dead');
-            }
-        }
-
-        // Обновляем индикатор текущей колонки
-        for (let row = 0; row < GRID_SIZE; row++) {
-            if (currentColumn > 0) {
-                const prevCell = gridElement.children[row * GRID_SIZE + (currentColumn - 1)];
-                prevCell.classList.remove('current');
-            }
-            const newCell = gridElement.children[row * GRID_SIZE + currentColumn];
-            newCell.classList.add('current');
-        }
-    }
-
-function updateEntireGrid() {
-    for (let i = 0; i < GRID_SIZE; i++) {
-        for (let j = 0; j < GRID_SIZE; j++) {
-            const cell = gridElement.children[i * GRID_SIZE + j];
-            
-            // Обновляем класс клетки на основе её текущего состояния
-            updateCellClass(cell, grid[i][j]);
-        }
-    }
-}
-
-    async function initializeApp() {
-        console.log('Initializing app...');
-        try {
-            console.log('Calling createAudioEngine...');
-            await createAudioEngine();
-            console.log('AudioEngine created');
-            console.log('Calling loadInitialGrid...');
-            await loadInitialGrid();
-            console.log('Initial grid loaded');
-        } catch (error) {
-            console.error('Error in initializeApp:', error);
-        }
-    }
-
-     function processStep() {
-    console.log('Processing step...');
-    return fetch('/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'step' })
-    })
-    .then(response => response.json())
-    .then(data => {
-        console.log('Step processed, updated grid:', data.grid);
-        grid = data.grid;
-        stepCounter = data.stepCounter;
-        stepCounterElement.textContent = stepCounter;
-        // Не вызываем createGrid() здесь
-    })
-    .catch(error => {
-        console.error('Error processing step:', error);
-    });
-}
-
-async function startPlaying() {
-    if (isPlaying) return;
-
-    // Проверяем и инициализируем AudioEngine если нужно
-    if (!audioEngine || !audioEngine.isInitialized) {
-        await createAudioEngine();
-    }
-
-    isPlaying = true;
-    stopButton.disabled = false;
-    autoButton.disabled = true;
-    currentColumn = 0;
-
-    await processStep();
-    processColumn();
-}
-
-    function stopPlaying() {
-        isPlaying = false;
-        stopButton.disabled = true;
-        autoButton.disabled = false;
-        clearTimeout(timerId);
-    }
-
-async function createAudioEngine() {
-    console.log('Creating AudioEngine...');
-    try {
-        if (audioEngine) {
-            await audioEngine.dispose();
-        }
-        
-        audioEngine = new AudioEngine({ 
-            GRID_SIZE: GRID_SIZE,
-            initialBPM: bpmValue 
-        });
-        
-        console.log('AudioEngine instance created:', audioEngine);
-        await audioEngine.init();
-        console.log('AudioEngine initialized');
-        return true;
-    } catch (error) {
-        console.error('Error in createAudioEngine:', error);
-        return false;
-    }
-}
-
-      // Event Listeners
-    applySettingsButton.addEventListener('click', async () => {
-        const newBPM = parseInt(bpmInput.value);
-        if (!isNaN(newBPM) && newBPM > 0) {
-            bpmValue = newBPM;
-            if (isPlaying) {
-                stopPlaying();
-                startPlaying();
-            }
-        }
-    });
-
-    console.log('Starting application initialization...');
-    
-    // Сначала загружаем сетку
-    const gridLoaded = await loadInitialGrid();
-    if (!gridLoaded) {
-        console.error('Failed to load initial grid. Stopping initialization.');
-        return;
-    }
-
-    // Затем пытаемся инициализировать аудио
-    initAudioEngine().then(success => {
-        if (success) {
-            console.log('Audio engine initialized successfully');
-        } else {
-            console.log('Application will run without audio');
-        }
-    });
-
-	document.addEventListener('DOMContentLoaded', async () => {
-    try {
-        // Предзагрузка сэмплов
-        await AudioSampleStore.loadSamples(GRID_SIZE);
-        console.log('Audio samples preloaded successfully');
-    } catch (error) {
-        console.warn('Failed to preload audio samples:', error);
-    }
-});
-
-    stepButton.addEventListener('click', async () => {
-    try {
-        // Принудительный запуск Tone.js
-        await Tone.start();
-        
-        // Инициализация AudioEngine если нужно
-        if (!audioEngine || !audioEngine.isInitialized) {
-            await createAudioEngine();
-        }
-        
-        isPlaying = false;
-        currentColumn = 0;
-        await processStep();
-        processColumn();
-    } catch (error) {
-        console.error('Step initialization error:', error);
-    }
-});
-
-autoButton.addEventListener('click', async () => {
-    try {
-        // Принудительный запуск Tone.js
-        await Tone.start();
-        
-        // Инициализация AudioEngine если нужно
-        if (!audioEngine || !audioEngine.isInitialized) {
-            await createAudioEngine();
-        }
-        
-        startPlaying();
-    } catch (error) {
-        console.error('Auto initialization error:', error);
-    }
-});
-
-    stopButton.addEventListener('click', () => stopPlaying());
-    
-    resetButton.addEventListener('click', async () => {
-        stopPlaying();
-        try {
-            const response = await fetch('/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'reset' })
-            });
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
+            body: JSON.stringify({ 
+              action: 'toggle', 
+              cell: [i, j], 
+              sessionId: this.sessionId 
+            })
+          });
+          
+          if (response.ok) {
             const data = await response.json();
-            grid = data.grid;
-            stepCounter = data.stepCounter;
-            stepCounterElement.textContent = stepCounter;
-            currentColumn = 0;
-            createGrid();
+            this.grid = data.grid;
+          }
         } catch (error) {
-            console.error('Error resetting grid:', error);
-            alert('An error occurred while resetting the grid. Please try again.');
+          console.error('Error updating cell:', error);
         }
-    });
+      }
 
-    applySettingsButton.addEventListener('click', () => {
-        const newBPM = parseInt(bpmInput.value);
-        if (!isNaN(newBPM) && newBPM > 0) {
-            bpmValue = newBPM;
-            if (isPlaying) {
-                stopPlaying();
-                startPlaying();
+      updateCellClass(cell, state) {
+        cell.className = 'cell'; // reset classes
+        if (state === 1 || state === 'alive') {
+          cell.classList.add('alive');
+        } else if (state === 2 || state === 'born') {
+          cell.classList.add('born');
+        } else if (state === 3 || state === 'dying') {
+          cell.classList.add('dying');
+        } else {
+          cell.classList.add('dead');
+        }
+
+        // Force a reflow to update the styling
+        cell.style.display = 'none';
+        cell.offsetHeight; // trigger reflow
+        cell.style.display = '';
+      }
+
+      calculateDelay() {
+        const msPerBeat = 60000 / this.bpmValue;
+        const msPerFullCycle = msPerBeat * 8;
+        return msPerFullCycle / this.GRID_SIZE;
+      }
+
+      async processColumn() {
+        const delay = this.calculateDelay();
+        
+        if (this.currentColumn >= this.GRID_SIZE) {
+          this.currentColumn = 0;
+          if (this.isPlaying && !this.isProcessingStep) {
+            this.isProcessingStep = true;
+            this.timerId = setTimeout(async () => {
+              await this.processStep();
+              this.isProcessingStep = false;
+              this.processColumn();
+            }, delay);
+          }
+          return;
+        }
+
+        for (let row = 0; row < this.GRID_SIZE; row++) {
+          const cellState = this.grid[row][this.currentColumn];
+          const cell = this.gridElement.children[row * this.GRID_SIZE + this.currentColumn];
+
+          if (cellState === 2) { // born state
+            this.updateCellClass(cell, 'born');
+            if (this.audioEngine) {
+              await this.audioEngine.playSound(row, 'birth');
             }
+          } else if (cellState === 3) { // dying state
+            this.updateCellClass(cell, 'dying');
+            if (this.audioEngine) {
+              await this.audioEngine.playSound(row, 'death');
+            }
+          }
         }
-    });
 
-    window.addEventListener('beforeunload', () => {
-        if (audioEngine) {
-            audioEngine.dispose();
+        // Update the visual “current column” indicator
+        this.updateColumnVisual();
+        this.currentColumn++;
+        this.timerId = setTimeout(() => this.processColumn(), delay);
+      }
+
+      updateColumnVisual() {
+    const prevColumn = (this.currentColumn - 1 + this.GRID_SIZE) % this.GRID_SIZE;
+    const currentColumn = this.currentColumn;
+
+    for (let row = 0; row < this.GRID_SIZE; row++) {
+        // Update previous column
+        const prevCell = this.gridElement.children[row * this.GRID_SIZE + prevColumn];
+        const prevCellState = this.grid[row][prevColumn];
+
+        if (prevCellState === 2) {
+            this.updateCellClass(prevCell, 'alive');
+            this.grid[row][prevColumn] = 1;
+        } else if (prevCellState === 3) {
+            this.updateCellClass(prevCell, 'dead');
+            this.grid[row][prevColumn] = 0;
         }
-    });
+        prevCell.classList.remove('current');
 
-    console.log('Application initialization completed');
-});
-</script>
+        // Update current column (for visual indicator)
+        const currentCell = this.gridElement.children[row * this.GRID_SIZE + currentColumn];
+        currentCell.classList.add('current');
+    }
+
+    // Explicitly clear the rightmost column if it's not the current one
+    if (currentColumn !== 0) {
+        const rightmostColumn = this.GRID_SIZE - 1;
+        for (let row = 0; row < this.GRID_SIZE; row++) {
+            const rightmostCell = this.gridElement.children[row * this.GRID_SIZE + rightmostColumn];
+            const rightmostCellState = this.grid[row][rightmostColumn];
+
+            if (rightmostCellState === 2) {
+                this.updateCellClass(rightmostCell, 'alive');
+                this.grid[row][rightmostColumn] = 1;
+            } else if (rightmostCellState === 3) {
+                this.updateCellClass(rightmostCell, 'dead');
+                this.grid[row][rightmostColumn] = 0;
+            }
+            rightmostCell.classList.remove('current');
+        }
+    }
+}
+
+      async processStep() {
+        if (!this.grid) {
+          console.error('Grid is not initialized');
+          return;
+        }
+        try {
+          const response = await fetch('/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              action: 'step',
+              sessionId: this.sessionId 
+            })
+          });
+          if (response.ok) {
+            const data = await response.json();
+            this.grid = data.grid;
+            this.stepCounter = data.stepCounter;
+            this.stepCounterElement.textContent = this.stepCounter;
+          } else {
+            console.error('Error processing step:', response.statusText);
+          }
+        } catch (error) {
+          console.error('Error processing step:', error);
+        }
+      }
+
+      async startPlaying() {
+        if (this.isPlaying) return;
+        try {
+          // Ensure the audio context is running
+          if (Tone.context.state !== 'running') {
+            await Tone.start();
+          }
+          if (!this.audioEngine || !this.audioEngine.isInitialized) {
+            await this.initAudioEngine();
+          }
+          this.isPlaying = true;
+          this.stopButton.disabled = false;
+          this.autoButton.disabled = true;
+          this.currentColumn = 0;
+          this.isProcessingStep = true;
+          await this.processStep();
+          this.isProcessingStep = false;
+          this.processColumn();
+        } catch (error) {
+          console.error('Start playing error:', error);
+        }
+      }
+
+      async stepOnce() {
+        try {
+          if (Tone.context.state !== 'running') {
+            await Tone.start();
+          }
+          if (!this.audioEngine || !this.audioEngine.isInitialized) {
+            await this.initAudioEngine();
+          }
+          this.isPlaying = false;
+          this.currentColumn = 0;
+          this.isProcessingStep = true;
+          await this.processStep();
+          this.isProcessingStep = false;
+          this.processColumn();
+        } catch (error) {
+          console.error('Step initialization error:', error);
+        }
+      }
+      
+      stopPlaying() {
+        this.isPlaying = false;
+        this.stopButton.disabled = true;
+        this.autoButton.disabled = false;
+        clearTimeout(this.timerId);
+      }
+
+      async resetGrid() {
+        this.stopPlaying();
+        try {
+          const response = await fetch('/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              action: 'reset',
+              sessionId: this.sessionId 
+            })
+          });
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          const data = await response.json();
+          this.grid = data.grid;
+          this.visualGrid = this.grid.map(row => row.slice()); // Sync visualGrid with grid
+          this.stepCounter = data.stepCounter;
+          this.stepCounterElement.textContent = this.stepCounter;
+          this.currentColumn = 0;
+          this.createGrid();
+        } catch (error) {
+          console.error('Error resetting grid:', error);
+          alert('An error occurred while resetting the grid. Please try again.');
+        }
+      }
+
+      updateBPM() {
+        const newBPM = parseInt(this.bpmInput.value);
+        if (!isNaN(newBPM) && newBPM > 0) {
+          this.bpmValue = newBPM;
+          if (this.isPlaying) {
+            this.stopPlaying();
+            this.startPlaying();
+          }
+        }
+      }
+    }
+
+    // Initialize the application once the DOM is loaded.
+    document.addEventListener('DOMContentLoaded', async function initApp() {
+      const app = new TenoriLifeApp();
+      await app.initialize();
+    });
+  </script>
 </body>
 </html>
