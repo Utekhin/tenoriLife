@@ -1,432 +1,552 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Life Synth</title>
-    <style>
-        #grid {
-            display: grid;
-            grid-template-columns: repeat(16, 20px);
-            grid-template-rows: repeat(16, 20px);
-            gap: 1px;
-            margin-top: 20px;
-        }
-        .cell {
-            width: 20px;
-            height: 20px;
-            border: 1px solid black;
-            cursor: pointer;
-        }
-        .alive { background-color: yellow; }
-        .dead { background-color: white; }
-        .born { background-color: blue; }
-        .dying { background-color: red; }
-        .current { border: 2px solid blue; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Life Synth</title>
+  <style>
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(16, 20px);
+      grid-template-rows: repeat(16, 20px);
+      gap: 1px;
+      margin-top: 20px;
+    }
+    .cell {
+      width: 20px;
+      height: 20px;
+      border: 1px solid black;
+      cursor: pointer;
+    }
+    .alive { background-color: yellow; }
+    .dead { background-color: white; }
+    .born { background-color: blue; }
+    .dying { background-color: red; }
+    .current { border: 2px solid blue; }
+  </style>
 </head>
 <body>
-    <h1>Life Synth</h1>
-    <div>Step <span id="stepCounter">0</span></div>
-    <div class="settings">
-        <label for="bpm">BPM:</label>
-        <input type="number" id="bpm" value="120">
-        <button id="applySettings">Apply BPM</button>
-    </div>
-    <div class="controls">
-        <button id="step">Step</button>
-        <button id="auto">Auto</button>
-        <button id="stop" disabled>Stop</button>
-        <button id="reset">Reset</button>
-    </div>
-    <div id="grid"></div>
-    
-<script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
-<script src="/static/session.js" type="module"></script>
+  <h1>Life Synth</h1>
+  <div>Step <span id="stepCounter">0</span></div>
+  <div class="settings">
+    <label for="bpm">BPM:</label>
+    <input type="number" id="bpm" value="120">
+    <button id="applySettings">Apply BPM</button>
+  </div>
+  <div class="controls">
+    <button id="step">Step</button>
+    <button id="auto">Auto</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="reset">Reset</button>
+  </div>
+  <div id="grid"></div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/tone/build/Tone.js"></script>
 <script type="module">
 import AudioEngine from '/static/audio_engine.js';
 import SessionManager from '/static/session.js';
 
-    class TenoriLifeApp {
-    constructor() {
-        // Constants
-        this.GRID_SIZE = 16;
+class TenoriLifeApp {
+  constructor() {
+    // Constants
+    this.GRID_SIZE = 16;
+    this.VIRTUAL_GRID_SIZE = this.GRID_SIZE + 1; // Add virtual column
 
-        // DOM Elements
-        this.gridElement = document.getElementById('grid');
-        this.stepCounterElement = document.getElementById('stepCounter');
-        this.bpmInput = document.getElementById('bpm');
-        this.applySettingsButton = document.getElementById('applySettings');
-        this.stepButton = document.getElementById('step');
-        this.autoButton = document.getElementById('auto');
-        this.stopButton = document.getElementById('stop');
-        this.resetButton = document.getElementById('reset');
+    // DOM Elements
+    this.gridElement = document.getElementById('grid');
+    this.stepCounterElement = document.getElementById('stepCounter');
+    this.bpmInput = document.getElementById('bpm');
+    this.applySettingsButton = document.getElementById('applySettings');
+    this.stepButton = document.getElementById('step');
+    this.autoButton = document.getElementById('auto');
+    this.stopButton = document.getElementById('stop');
+    this.resetButton = document.getElementById('reset');
 
-        // State variables
-        this.visualGrid = [];  // Визуальное состояние сетки
-        this.grid = [];        // Логическое состояние сетки
-        this.stepCounter = 0;
-        this.isPlaying = false;
-        this.bpmValue = 120;
-        this.audioEngine = null;
-        this.currentColumn = 0;
-        this.timerId = null;
-                this.isProcessingStep = false;
-        // Session Management
-        this.sessionId = SessionManager.getSessionId();
+    // State variables
+    this.grid = [];        // State of the grid (16x16)
+    this.virtualGrid = []; // Extended grid with virtual column (16x17)
+    this.stepCounter = 0;
+    this.isPlaying = false;
+    this.bpmValue = 120;
+    this.audioEngine = null;
+    this.currentColumn = 0;
+    this.timerId = null;
+    this.isProcessingStep = false;
 
-        // Bind methods to maintain context
-        this.bindMethods();
+    // Session Management
+    this.sessionId = SessionManager.getSessionId();
+
+    // Bind methods
+    this.toggleCell = this.toggleCell.bind(this);
+    this.processColumn = this.processColumn.bind(this);
+    this.startPlaying = this.startPlaying.bind(this);
+    this.stopPlaying = this.stopPlaying.bind(this);
+
+    // Initialize grid array
+    this.initializeEmptyGrid();
+  }
+  
+  initializeEmptyGrid() {
+    // Create a 16x16 grid filled with zeros
+    this.grid = [];
+    this.virtualGrid = [];
+    for (let i = 0; i < this.GRID_SIZE; i++) {
+      const row = [];
+      const virtualRow = [];
+      for (let j = 0; j < this.GRID_SIZE; j++) {
+        row.push(0);
+        virtualRow.push(0);
+      }
+      // Add the virtual column
+      virtualRow.push(0);
+      this.grid.push(row);
+      this.virtualGrid.push(virtualRow);
     }
+  }
 
-    bindMethods() {
-        this.toggleCell = this.toggleCell.bind(this);
-        this.processColumn = this.processColumn.bind(this);
-        this.startPlaying = this.startPlaying.bind(this);
-        this.stopPlaying = this.stopPlaying.bind(this);
-    }
+  createGrid() {
+    console.log('Creating grid...');
+    this.gridElement.innerHTML = '';
 
-    createGrid() {
-        console.log('Creating grid...');
-        console.log('Current grid data:', this.grid);
-                console.log('Current visual grid data:', this.visualGrid);
-        this.gridElement.innerHTML = '';
+    for (let i = 0; i < this.GRID_SIZE; i++) {
+      for (let j = 0; j < this.GRID_SIZE; j++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        this.updateCellClass(cell, this.virtualGrid[i][j]);
+        cell.dataset.row = i;
+        cell.dataset.col = j;
 
-        for (let i = 0; i < this.GRID_SIZE; i++) {
-            for (let j = 0; j < this.GRID_SIZE; j++) {
-                const cell = document.createElement('div');
-                cell.className = 'cell';
-                
-                this.updateCellClass(cell, this.visualGrid[i][j]);
-                cell.dataset.row = i;
-                cell.dataset.col = j;
-
-                cell.addEventListener('click', () => {
-                    console.log(`Cell clicked: ${i}, ${j}`);
-                    this.toggleCell(i, j);
-                });
-
-                this.gridElement.appendChild(cell);
-            }
-        }
-        console.log('Grid created successfully');
-    }
-
-
-
-    async loadInitialGrid() {
-    try {
-        const response = await fetch(`/initial-grid?sessionId=${this.sessionId}`);
-        if (!response.ok) {
-            throw new Error(`Failed to load grid: ${response.statusText}`);
-        }
-        const data = await response.json();
-        this.grid = data.grid;
-        this.visualGrid = this.grid.map(row => row.slice()); // Создаем копию grid
-        this.stepCounter = data.stepCounter || 0;
-        this.stepCounterElement.textContent = this.stepCounter;
-        this.createGrid();
-        return true;
-    } catch (error) {
-        console.error('Error loading initial grid:', error);
-        return false;
-    }
-}
-
-        async initialize() {
-    try {
-        // Load initial grid
-        const gridLoaded = await this.loadInitialGrid();
-        if (!gridLoaded) {
-            console.error('Failed to load initial grid');
-            return;
-        }
-
-        // Set up event listeners
-        this.setupEventListeners();
-
-        console.log('TenoriLife application initialized');
-    } catch (error) {
-        console.error('Initialization error:', error);
-    }
-}
-
-async initAudioEngine() {
-    try {
-        // Принудительный запуск AudioContext после взаимодействия
-        await Tone.start();
-        console.log('Audio context started');
-
-        this.audioEngine = new AudioEngine({
-            GRID_SIZE: this.GRID_SIZE,
-            initialBPM: this.bpmValue,
-            MAX_SIMULTANEOUS_SOUNDS: 8
+        cell.addEventListener('click', () => {
+          console.log(`Cell clicked: ${i}, ${j}`);
+          this.toggleCell(i, j);
         });
 
-        await this.audioEngine.init();
-        console.log('Audio engine initialized');
-        return true;
-    } catch (error) {
-        console.error('Failed to initialize audio engine:', error);
-        this.audioEngine = null;
-        return false;
+        this.gridElement.appendChild(cell);
+      }
     }
-}
+    console.log('Grid created successfully');
+  }
 
-setupEventListeners() {
-    this.gridElement.addEventListener('click', async (event) => {
-        await Tone.start(); // Принудительный запуск AudioContext
+  async loadInitialGrid() {
+    try {
+      const response = await fetch(`/initial-grid?sessionId=${this.sessionId}`);
+      if (!response.ok) {
+        throw new Error(`Failed to load grid: ${response.statusText}`);
+      }
+      const data = await response.json();
+      this.grid = data.grid;
+      
+      // Sync the virtual grid with the actual grid
+      this.syncVirtualGrid();
+      
+      this.stepCounter = data.stepCounter || 0;
+      this.stepCounterElement.textContent = this.stepCounter;
+      this.createGrid();
+      return true;
+    } catch (error) {
+      console.error('Error loading initial grid:', error);
+      return false;
+    }
+  }
+  
+  syncVirtualGrid() {
+    // Copy the actual grid to the virtual grid
+    for (let i = 0; i < this.GRID_SIZE; i++) {
+      for (let j = 0; j < this.GRID_SIZE; j++) {
+        this.virtualGrid[i][j] = this.grid[i][j];
+      }
+      // Initialize the virtual column to match the first column
+      // (will be updated properly during step processing)
+      this.virtualGrid[i][this.GRID_SIZE] = this.grid[i][0];
+    }
+  }
 
-        if (!this.audioEngine || !this.audioEngine.isInitialized) {
-            const audioInitialized = await this.initAudioEngine();
-            if (!audioInitialized) {
-                console.error('Failed to initialize audio engine on user interaction');
-                return;
-            }
+  async initialize() {
+    try {
+      const gridLoaded = await this.loadInitialGrid();
+      if (!gridLoaded) {
+        console.error('Failed to load initial grid');
+        return;
+      }
+      this.setupEventListeners();
+      console.log('TenoriLife application initialized');
+    } catch (error) {
+      console.error('Initialization error:', error);
+    }
+  }
+
+  async initAudioEngine() {
+    try {
+      if (Tone.context.state !== 'running') {
+        await Tone.start();
+        console.log('Audio context started via resume()');
+      }
+
+      this.audioEngine = new AudioEngine({
+        GRID_SIZE: this.GRID_SIZE,
+        initialBPM: this.bpmValue,
+        MAX_SIMULTANEOUS_SOUNDS: 8
+      });
+
+      await this.audioEngine.init();
+      console.log('Audio engine initialized');
+      return true;
+    } catch (error) {
+      console.error('Failed to initialize audio engine:', error);
+      this.audioEngine = null;
+      return false;
+    }
+  }
+
+  setupEventListeners() {
+    this.gridElement.addEventListener('click', async () => {
+      if (Tone.context.state !== 'running') {
+        await Tone.start();
+        console.log('Audio context resumed on grid click');
+      }
+      if (!this.audioEngine || !this.audioEngine.isInitialized) {
+        const audioInitialized = await this.initAudioEngine();
+        if (!audioInitialized) {
+          console.error('Failed to initialize audio engine on user interaction');
+          return;
         }
-
-        console.log('Matrix clicked, audio engine ready');
+      }
     });
 
-    // Другие события, кнопки управления
     this.stepButton.addEventListener('click', this.stepOnce.bind(this));
     this.autoButton.addEventListener('click', this.startPlaying);
     this.stopButton.addEventListener('click', this.stopPlaying);
     this.resetButton.addEventListener('click', this.resetGrid.bind(this));
     this.applySettingsButton.addEventListener('click', this.updateBPM.bind(this));
-}
+  }
 
-    async toggleCell(i, j) {
-    this.grid[i][j] = this.grid[i][j] === 0 ? 1 : 0;
+  async toggleCell(i, j) {
+    // Toggle the logical state of the cell in both grids
+    const newState = this.virtualGrid[i][j] === 0 ? 1 : 0;
+    this.virtualGrid[i][j] = newState;
+    
+    // Update visual representation
     const cell = this.gridElement.children[i * this.GRID_SIZE + j];
-    this.updateCellClass(cell, this.grid[i][j]);
-    
+    this.updateCellClass(cell, newState);
+
     try {
-        const response = await fetch('/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                action: 'toggle', 
-                cell: [i, j], 
-                sessionId: this.sessionId 
-            })
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            this.grid = data.grid;
-        }
-    } catch (error) {
-        console.error('Ошибка при обновлении клетки:', error);
-    }
-}
-
-    updateCellClass(cell, state) {
-    cell.className = 'cell'; // Сбрасываем все классы
-    if (state === 1 || state === 'alive') {
-        cell.classList.add('alive');
-    } else if (state === 2 || state === 'born') {
-        cell.classList.add('born');
-    } else if (state === 3 || state === 'dying') {
-        cell.classList.add('dying');
-    } else {
-        cell.classList.add('dead');
-    }
-
-    // Принудительная перерисовка
-    cell.style.display = 'none';
-    cell.offsetHeight; // Триггер перерисовки
-    cell.style.display = '';
-}
-
-
-
-   calculateDelay() {
-        const msPerBeat = 60000 / this.bpmValue;
-        const msPerFullCycle = msPerBeat * 8;
-        return msPerFullCycle / this.GRID_SIZE;
-    }
-
-    
-async processColumn() {
-    const delay = this.calculateDelay();
-    
-    if (this.currentColumn >= this.GRID_SIZE) {
-        this.currentColumn = 0;
-        if (this.isPlaying && !this.isProcessingStep) {
-            this.isProcessingStep = true;
-            this.timerId = setTimeout(async () => {
-                await this.processStep();
-                this.isProcessingStep = false;
-                this.processColumn();
-            }, delay);
-        }
-        return;
-    }
-
-    for (let row = 0; row < this.GRID_SIZE; row++) {
-        const cellState = this.grid[row][this.currentColumn];
-        const cell = this.gridElement.children[row * this.GRID_SIZE + this.currentColumn];
-
-        if (cellState === 2) {
-            this.updateCellClass(cell, 'born');
-            if (this.audioEngine) {
-                await this.audioEngine.playSound(row, 'birth');
-            }
-        } else if (cellState === 3) {
-            this.updateCellClass(cell, 'dying');
-            if (this.audioEngine) {
-                await this.audioEngine.playSound(row, 'death');
-            }
-        }
-    }
-
-    this.updateColumnVisual();
-    this.currentColumn++;
-    this.timerId = setTimeout(() => this.processColumn(), delay);
-}
-
-
-updateColumnVisual() {
-    const prevColumn = (this.currentColumn - 1 + this.GRID_SIZE) % this.GRID_SIZE;
-
-    for (let row = 0; row < this.GRID_SIZE; row++) {
-        const prevCell = this.gridElement.children[row * this.GRID_SIZE + prevColumn];
-        const state = this.grid[row][prevColumn];
-
-        if (state === 2) {
-            this.updateCellClass(prevCell, 'alive');
-        } else if (state === 3) {
-            this.updateCellClass(prevCell, 'dead');
-        }
-        
-        prevCell.classList.remove('current');
-    }
-
-    for (let row = 0; row < this.GRID_SIZE; row++) {
-        const currentCell = this.gridElement.children[row * this.GRID_SIZE + this.currentColumn];
-        currentCell.classList.add('current');
-    }
-}
-
-    async processStep() {
-    if (!this.grid) {
-        console.error('Grid is not initialized');
-        return;
-    }
-    try {
-        const response = await fetch('/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                action: 'step',
-                sessionId: this.sessionId 
-            })
-        });
-        if (response.ok) {
-            const data = await response.json();
-            this.grid = data.grid;
-            this.stepCounter = data.stepCounter;
-            this.stepCounterElement.textContent = this.stepCounter;
-        } else {
-            console.error('Error processing step:', response.statusText);
-        }
-    } catch (error) {
-        console.error('Error processing step:', error);
-    }
-}
-
-    
-    async startPlaying() {
-    if (this.isPlaying) return;
-    try {
-        await Tone.start();
-        if (!this.audioEngine || !this.audioEngine.isInitialized) {
-            await this.initAudioEngine();
-        }
-        this.isPlaying = true;
-        this.stopButton.disabled = false;
-        this.autoButton.disabled = true;
-        this.currentColumn = 0;
-        this.isProcessingStep = true;
-        await this.processStep();
-        this.isProcessingStep = false;
-        this.processColumn();
-    } catch (error) {
-        console.error('Start playing error:', error);
-    }
-}
-
-async stepOnce() {
-    try {
-        await Tone.start();
-        if (!this.audioEngine || !this.audioEngine.isInitialized) {
-            await this.initAudioEngine();
-        }
-        this.isPlaying = false;
-        this.currentColumn = 0;
-        this.isProcessingStep = true;
-        await this.processStep();
-        this.isProcessingStep = false;
-        this.processColumn();
-    } catch (error) {
-        console.error('Step initialization error:', error);
-    }
-}
-   
-    stopPlaying() {
-        this.isPlaying = false;
-        this.stopButton.disabled = true;
-        this.autoButton.disabled = false;
-        clearTimeout(this.timerId);
-    }
-
-    async resetGrid() {
-    this.stopPlaying();
-    
-    try {
-        const response = await fetch('/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                action: 'reset',
-                sessionId: this.sessionId 
-            })
-        });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
+      const response = await fetch('/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'toggle', 
+          cell: [i, j], 
+          sessionId: this.sessionId 
+        })
+      });
+      
+      if (response.ok) {
         const data = await response.json();
         this.grid = data.grid;
-        this.visualGrid = this.grid.map(row => row.slice()); // Синхронизируем visualGrid с grid
+        // Sync the virtual grid with updated data from server
+        this.syncVirtualGrid();
+      }
+    } catch (error) {
+      console.error('Error updating cell:', error);
+    }
+  }
+
+  updateCellClass(cell, state) {
+    cell.className = 'cell'; // reset classes
+    if (state === 1 || state === 'alive') {
+      cell.classList.add('alive');
+    } else if (state === 2 || state === 'born') {
+      cell.classList.add('born');
+    } else if (state === 3 || state === 'dying') {
+      cell.classList.add('dying');
+    } else {
+      cell.classList.add('dead');
+    }
+  }
+
+  calculateDelay() {
+    const msPerBeat = 60000 / this.bpmValue;
+    const msPerFullCycle = msPerBeat * 8;
+    return msPerFullCycle / this.GRID_SIZE;
+  }
+
+  async processColumn() {
+    const delay = this.calculateDelay();
+    
+    // Handle the previous column - update state for cells that were born or dying
+    const prevColumn = (this.currentColumn - 1 + this.VIRTUAL_GRID_SIZE) % this.VIRTUAL_GRID_SIZE;
+    
+    // Only update the previous column if it's within the visible grid
+    if (prevColumn < this.GRID_SIZE) {
+      for (let row = 0; row < this.GRID_SIZE; row++) {
+        const prevCellIndex = row * this.GRID_SIZE + prevColumn;
+        const prevCell = this.gridElement.children[prevCellIndex];
+        
+        // Remove 'current' class from the previous column
+        prevCell.classList.remove('current');
+        
+        const prevCellState = this.virtualGrid[row][prevColumn];
+        
+        if (prevCellState === 2) {
+          // Born cells become alive after scanner passes
+          this.virtualGrid[row][prevColumn] = 1;
+          this.updateCellClass(prevCell, 'alive');
+        } else if (prevCellState === 3) {
+          // Dying cells disappear after scanner passes
+          this.virtualGrid[row][prevColumn] = 0;
+          this.updateCellClass(prevCell, 'dead');
+        }
+      }
+    }
+    
+    // Handle the current scanning column
+    // Only process if within visible grid
+    if (this.currentColumn < this.GRID_SIZE) {
+      for (let row = 0; row < this.GRID_SIZE; row++) {
+        const cellIndex = row * this.GRID_SIZE + this.currentColumn;
+        const cell = this.gridElement.children[cellIndex];
+        
+        // Add 'current' class to the current column
+        cell.classList.add('current');
+        
+        const cellState = this.virtualGrid[row][this.currentColumn];
+        
+        if (cellState === 2) { // born state
+          this.updateCellClass(cell, 'born');
+          if (this.audioEngine) {
+            await this.audioEngine.playSound(row, 'birth');
+          }
+        } else if (cellState === 3) { // dying state
+          this.updateCellClass(cell, 'dying');
+          if (this.audioEngine) {
+            await this.audioEngine.playSound(row, 'death');
+          }
+        }
+      }
+    }
+    
+    // Move to next column
+    const nextColumn = (this.currentColumn + 1) % this.VIRTUAL_GRID_SIZE;
+    
+    // If we've reached the virtual column (end of cycle)
+    if (nextColumn === this.GRID_SIZE) {
+      // Process the virtual column silently (no visual updates)
+      for (let row = 0; row < this.GRID_SIZE; row++) {
+        const virtualCellState = this.virtualGrid[row][this.GRID_SIZE];
+        
+        if (virtualCellState === 2) {
+          // Born cells become alive
+          this.virtualGrid[row][this.GRID_SIZE] = 1;
+        } else if (virtualCellState === 3) {
+          // Dying cells disappear
+          this.virtualGrid[row][this.GRID_SIZE] = 0;
+        }
+      }
+    }
+    
+    // If completing a cycle (moving from virtual column to first)
+    if (nextColumn === 0) {
+      // Schedule the next step processing if in auto play mode
+      if (this.isPlaying && !this.isProcessingStep) {
+        this.isProcessingStep = true;
+        this.timerId = setTimeout(async () => {
+          await this.processStep();
+          this.isProcessingStep = false;
+          this.currentColumn = 0;
+          this.processColumn();
+        }, delay);
+        return;
+      }
+      
+      // If we're not continuing, reset to column 0
+      if (!this.isPlaying) {
+        this.currentColumn = 0;
+        return;
+      }
+    }
+    
+    this.currentColumn = nextColumn;
+    
+    // Continue processing columns if playing or if we haven't completed a cycle
+    if (this.isPlaying || this.currentColumn !== 0) {
+      this.timerId = setTimeout(() => this.processColumn(), delay);
+    }
+  }
+
+  async processStep() {
+    if (!this.grid) {
+      console.error('Grid is not initialized');
+      return;
+    }
+    try {
+      const response = await fetch('/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'step',
+          sessionId: this.sessionId 
+        })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        this.grid = data.grid;
         this.stepCounter = data.stepCounter;
         this.stepCounterElement.textContent = this.stepCounter;
-        this.currentColumn = 0;
-        this.createGrid();
+        
+        // Update the virtual grid with the new step data
+        this.prepareVirtualGridForNextCycle();
+      } else {
+        console.error('Error processing step:', response.statusText);
+      }
     } catch (error) {
-        console.error('Error resetting grid:', error);
-        alert('An error occurred while resetting the grid. Please try again.');
+      console.error('Error processing step:', error);
     }
-}
+  }
+  
+  prepareVirtualGridForNextCycle() {
+    // Copy the main grid to the first 16 columns of virtual grid
+    for (let i = 0; i < this.GRID_SIZE; i++) {
+      for (let j = 0; j < this.GRID_SIZE; j++) {
+        this.virtualGrid[i][j] = this.grid[i][j];
+      }
+      // The virtual column (17th) matches the first column of next cycle
+      // This will be revealed when scanner reaches rightmost column
+      this.virtualGrid[i][this.GRID_SIZE] = this.grid[i][0];
+    }
+  }
 
-    updateBPM() {
-        const newBPM = parseInt(this.bpmInput.value);
-        if (!isNaN(newBPM) && newBPM > 0) {
-            this.bpmValue = newBPM;
-            if (this.isPlaying) {
-                this.stopPlaying();
-                this.startPlaying();
-            }
+  async startPlaying() {
+    if (this.isPlaying) return;
+    try {
+      if (Tone.context.state !== 'running') {
+        await Tone.start();
+      }
+      if (!this.audioEngine || !this.audioEngine.isInitialized) {
+        await this.initAudioEngine();
+      }
+      this.isPlaying = true;
+      this.stopButton.disabled = false;
+      this.autoButton.disabled = true;
+      
+      // Process first step before starting the column scan
+      if (this.currentColumn === 0) {
+        this.isProcessingStep = true;
+        await this.processStep();
+        this.isProcessingStep = false;
+      }
+      
+      this.processColumn();
+    } catch (error) {
+      console.error('Start playing error:', error);
+    }
+  }
+
+ async stepOnce() {
+    try {
+      if (Tone.context.state !== 'running') {
+        await Tone.start();
+      }
+      if (!this.audioEngine || !this.audioEngine.isInitialized) {
+        await this.initAudioEngine();
+      }
+      
+      // Stop any ongoing playback
+      this.stopPlaying();
+      
+      // Process one step and start scanning if at beginning of cycle
+      if (this.currentColumn === 0) {
+        this.isProcessingStep = true;
+        await this.processStep();
+        this.isProcessingStep = false;
+      }
+      
+      this.processColumn();
+    } catch (error) {
+      console.error('Step initialization error:', error);
+    }
+  }
+  
+  stopPlaying() {
+    this.isPlaying = false;
+    this.stopButton.disabled = true;
+    this.autoButton.disabled = false;
+    clearTimeout(this.timerId);
+    
+    // Clear any active "current" column indicators
+    for (let i = 0; i < this.GRID_SIZE; i++) {
+      for (let j = 0; j < this.GRID_SIZE; j++) {
+        const cell = this.gridElement.children[i * this.GRID_SIZE + j];
+        cell.classList.remove('current');
+        
+        // Also clean up any born/dying cells that might be left
+        if (this.virtualGrid[i][j] === 2) {
+          this.virtualGrid[i][j] = 1;
+          this.updateCellClass(cell, 'alive');
+        } else if (this.virtualGrid[i][j] === 3) {
+          this.virtualGrid[i][j] = 0;
+          this.updateCellClass(cell, 'dead');
         }
+      }
     }
+    
+    // Reset virtual column states if needed
+    for (let i = 0; i < this.GRID_SIZE; i++) {
+      if (this.virtualGrid[i][this.GRID_SIZE] === 2) {
+        this.virtualGrid[i][this.GRID_SIZE] = 1;
+      } else if (this.virtualGrid[i][this.GRID_SIZE] === 3) {
+        this.virtualGrid[i][this.GRID_SIZE] = 0;
+      }
+    }
+  }
+
+  async resetGrid() {
+    this.stopPlaying();
+    try {
+      const response = await fetch('/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'reset',
+          sessionId: this.sessionId 
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      this.grid = data.grid;
+      this.stepCounter = data.stepCounter;
+      this.stepCounterElement.textContent = this.stepCounter;
+      this.currentColumn = 0;
+      
+      // Reset the virtual grid
+      this.syncVirtualGrid();
+      
+      this.createGrid();
+    } catch (error) {
+      console.error('Error resetting grid:', error);
+      alert('An error occurred while resetting the grid. Please try again.');
+    }
+  }
+
+  updateBPM() {
+    const newBPM = parseInt(this.bpmInput.value);
+    if (!isNaN(newBPM) && newBPM > 0) {
+      this.bpmValue = newBPM;
+      if (this.isPlaying) {
+        this.stopPlaying();
+        this.startPlaying();
+      }
+    }
+  }
 }
 
-// Инициализация приложения при загрузке DOM
+// Initialize the application once the DOM is loaded.
 document.addEventListener('DOMContentLoaded', async function initApp() {
-    const app = new TenoriLifeApp();
-    await app.initialize();
+  const app = new TenoriLifeApp();
+  await app.initialize();
 });
 </script>
 </body>
